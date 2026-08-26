@@ -50,8 +50,25 @@ function Get-IisFlexeraEndpoints {
     foreach ($site in $sites) {
         if ($SiteName -and $site.Name -ne $SiteName) { continue }
 
-        $apps  = @(Get-WebApplication -Site $site.Name -ErrorAction SilentlyContinue)
-        $vdirs = @(Get-WebVirtualDirectory -Site $site.Name -ErrorAction SilentlyContinue)
+        # Errors here are surfaced via Write-Warning rather than swallowed
+        # with -ErrorAction SilentlyContinue: under PowerShell 7, the
+        # WebAdministration module runs through the Windows PowerShell
+        # compatibility layer and these cmdlets can fail without an
+        # obvious symptom other than "nothing was found" - which is
+        # otherwise indistinguishable from a genuinely empty site.
+        $apps = @()
+        try {
+            $apps = @(Get-WebApplication -Site $site.Name -ErrorAction Stop)
+        } catch {
+            Write-Warning "Get-WebApplication failed for site '$($site.Name)': $($_.Exception.Message)"
+        }
+
+        $vdirs = @()
+        try {
+            $vdirs = @(Get-WebVirtualDirectory -Site $site.Name -ErrorAction Stop)
+        } catch {
+            Write-Warning "Get-WebVirtualDirectory failed for site '$($site.Name)': $($_.Exception.Message)"
+        }
 
         $candidates = New-Object System.Collections.Generic.List[object]
         foreach ($a in $apps) {
@@ -221,12 +238,18 @@ function Invoke-FlexeraIisDiscovery {
 
     $warnings = New-Object System.Collections.Generic.List[string]
 
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        $warnings.Add("Running under PowerShell $($PSVersionTable.PSVersion) (Core edition). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); the WebAdministration module runs through PowerShell 7's Windows PowerShell compatibility layer and some cmdlets (e.g. Get-WebApplication, Get-WebVirtualDirectory) can fail there without an obvious symptom. If discovery finds nothing on a server known to have IIS/Flexera configured, retry under powershell.exe (Windows PowerShell 5.1) before assuming the topology itself is the problem.")
+    }
+
     $endpoints = @()
+    $discoveryWarnings = @()
     try {
-        $endpoints = Get-IisFlexeraEndpoints -KnownEndpointNames $KnownEndpointNames -SiteName $SiteName -AppPoolName $AppPoolName
+        $endpoints = @(Get-IisFlexeraEndpoints -KnownEndpointNames $KnownEndpointNames -SiteName $SiteName -AppPoolName $AppPoolName -WarningVariable discoveryWarnings)
     } catch {
         $warnings.Add("Flexera endpoint discovery failed: $($_.Exception.Message)")
     }
+    foreach ($dw in $discoveryWarnings) { $warnings.Add("Endpoint discovery: $dw") }
 
     $resolvedPools = @($endpoints | Where-Object { $_.AppPoolName } | Select-Object -ExpandProperty AppPoolName -Unique)
 
@@ -236,7 +259,8 @@ function Invoke-FlexeraIisDiscovery {
     }
 
     if (-not $resolvedPools) {
-        throw 'Unable to determine which Application Pool serves Flexera traffic. No ManageSoftRL/ManageSoftDL endpoint was found and no -SiteName/-AppPoolName override was supplied. Refusing to start an unattended run against an ambiguous target.'
+        $diagnostic = if ($warnings.Count -gt 0) { " Diagnostic warnings collected during discovery: " + ($warnings -join ' | ') } else { '' }
+        throw "Unable to determine which Application Pool serves Flexera traffic. No ManageSoftRL/ManageSoftDL endpoint was found and no -SiteName/-AppPoolName override was supplied. Refusing to start an unattended run against an ambiguous target.$diagnostic"
     }
 
     $sites = @($endpoints | Where-Object { $_.SiteName } | Select-Object -ExpandProperty SiteName -Unique)

@@ -59,6 +59,10 @@ function Write-CollectorEvent {
 
 Write-Host 'Starting Flexera Beacon IIS collector...'
 
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    Write-Warning "Running under PowerShell $($PSVersionTable.PSVersion) (Core edition). This project targets Windows PowerShell 5.1 first; the WebAdministration module runs through PowerShell 7's Windows PowerShell compatibility layer, which can make discovery cmdlets fail silently. If discovery reports no Flexera endpoint on a server known to have one, retry under powershell.exe (Windows PowerShell 5.1) before assuming the topology itself is the problem."
+}
+
 $runPath = New-RunDirectory -BasePath $OutputPath
 $collectorEventsPath   = Join-Path $runPath 'collector-events.csv'
 $countersPath          = Join-Path $runPath 'iis-counters.csv'
