@@ -101,7 +101,12 @@ $requests = @()
 $logWarnings = New-Object System.Collections.Generic.List[string]
 
 if ($LogPath) {
-    $logSet = Read-W3CLogSet -Path $LogPath
+    # When -Date is given, pre-filter which log files even get parsed
+    # (see Get-W3CLogFileSet) rather than parsing an entire log directory
+    # just to discard most of it in Select-ByDate below.
+    $logSetParams = @{ Path = $LogPath }
+    if ($targetDate) { $logSetParams['SinceDate'] = $targetDate }
+    $logSet = Read-W3CLogSet @logSetParams
     if (-not $logSet.FieldsConsistent) {
         $logWarnings.Add('IIS log files in this run use inconsistent #Fields: definitions; each file was parsed against its own header, but column sets differ across files.') | Out-Null
     }

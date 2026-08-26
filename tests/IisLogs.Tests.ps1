@@ -65,6 +65,42 @@ Describe 'Read-W3CLogSet' {
     }
 }
 
+Describe 'Get-W3CLogFileSet -SinceDate pre-filter' {
+    BeforeEach {
+        $logDir = Join-Path ([System.IO.Path]::GetTempPath()) ("iis-flexera-logtest-{0}" -f ([guid]::NewGuid()))
+        New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+
+        $oldFile = Join-Path $logDir 'u_ex260818.log'
+        $targetFile = Join-Path $logDir 'u_ex260820.log'
+        Set-Content -Path $oldFile -Value '#Fields: date time'
+        Set-Content -Path $targetFile -Value '#Fields: date time'
+
+        (Get-Item $oldFile).LastWriteTime = (Get-Date '2026-08-18T23:00:00')
+        (Get-Item $targetFile).LastWriteTime = (Get-Date '2026-08-20T23:00:00')
+    }
+
+    AfterEach {
+        Remove-Item -LiteralPath $logDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'includes every *.log file in a directory when no -SinceDate is given' {
+        $files = @(Get-W3CLogFileSet -Path @($logDir))
+        $files.Count | Should -Be 2
+    }
+
+    It 'skips a file last written before -SinceDate' {
+        $files = @(Get-W3CLogFileSet -Path @($logDir) -SinceDate (Get-Date '2026-08-20'))
+        $files.Count | Should -Be 1
+        $files[0] | Should -Match 'u_ex260820\.log$'
+    }
+
+    It 'never skips an explicitly named file, even if written before -SinceDate' {
+        $oldFile = Join-Path $logDir 'u_ex260818.log'
+        $files = @(Get-W3CLogFileSet -Path @($oldFile) -SinceDate (Get-Date '2026-08-20'))
+        $files.Count | Should -Be 1
+    }
+}
+
 Describe 'ConvertTo-NormalizedRequestRecord' {
     It 'normalizes typed fields and treats "-" as null' {
         $raw = Read-W3CLogFile -Path (Join-Path $fixtureDir 'standard-fields.log')

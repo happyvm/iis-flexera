@@ -82,17 +82,34 @@ function Get-W3CLogFileSet {
         Expands a mix of file and directory paths into a sorted list of
         concrete *.log files. Observation runs are not guaranteed to fit
         in a single file (log rotation) - SPECIFICATION.md section 9.4.
+
+        -SinceDate is an optional, deliberately one-sided pre-filter for
+        directory expansion only (an explicitly named file is always
+        included - the caller pointed at it on purpose): it skips a file
+        whose LastWriteTime is before that date, since an append-only IIS
+        log can never contain entries from that date or later without
+        having been written to on or after it. It never skips a file for
+        being "too late" (e.g. Weekly/Monthly/Unlimited/MaxSize log
+        rotation can leave one file's LastWriteTime long after some of
+        its actual content's dates), so it can only reduce work, never
+        silently drop data - Select-ByDate on the parsed records remains
+        the authoritative filter.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path,
+        [datetime]$SinceDate
     )
 
     $files = New-Object System.Collections.Generic.List[string]
 
     foreach ($p in $Path) {
         if (Test-Path -LiteralPath $p -PathType Container) {
-            Get-ChildItem -LiteralPath $p -Filter '*.log' -File |
+            $candidates = Get-ChildItem -LiteralPath $p -Filter '*.log' -File
+            if ($SinceDate) {
+                $candidates = $candidates | Where-Object { $_.LastWriteTime -ge $SinceDate.Date }
+            }
+            $candidates |
                 Sort-Object Name |
                 ForEach-Object { $files.Add($_.FullName) }
         }
@@ -113,13 +130,21 @@ function Read-W3CLogSet {
         Reports whether all files declared the same #Fields: order, since
         a mismatch across rotated files is useful collection-quality
         information for the report rather than a silent inconsistency.
+
+        -SinceDate is passed straight through to Get-W3CLogFileSet as a
+        pre-filter over which files get parsed at all - see that
+        function's comment for why it only ever skips files that
+        provably cannot contain the target date, never the reverse.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path,
+        [datetime]$SinceDate
     )
 
-    $files = Get-W3CLogFileSet -Path $Path
+    $fileSetParams = @{ Path = $Path }
+    if ($SinceDate) { $fileSetParams['SinceDate'] = $SinceDate }
+    $files = Get-W3CLogFileSet @fileSetParams
     $allRecords = New-Object System.Collections.Generic.List[object]
     $totalMalformed = 0
     $fieldSets = New-Object System.Collections.Generic.List[object]
