@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # Markdown report generation.
 #
 # Capacity wording must stay observational (SPECIFICATION.md section
@@ -30,6 +32,27 @@ function Format-OptionalValue {
 
     if ($null -eq $Value) { return 'Unknown' }
     return "$Value"
+}
+
+function Get-PropertyOrNull {
+    <#
+        Reads a property that may be entirely absent from the object,
+        e.g. a security-audit.json produced by an older schema version
+        (the "Scope" field was added after v0.1's first control set) and
+        then re-analyzed with a newer Analyze-FlexeraBeaconIIS.ps1. Under
+        Set-StrictMode, $Object.Missing throws instead of returning $null,
+        so a schema-evolution gap must be checked explicitly rather than
+        relying on that historical null-on-missing-property behavior.
+    #>
+    [CmdletBinding()]
+    param(
+        [object]$Object,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $Object) { return $null }
+    if ($Object.PSObject.Properties.Match($Name).Count -eq 0) { return $null }
+    return $Object.$Name
 }
 
 function ConvertFrom-PSCustomObjectMap {
@@ -206,7 +229,7 @@ function New-CollectionReport {
         [void]$sb.AppendLine('| Control | Scope | Status | Priority | Effective recommendation |')
         [void]$sb.AppendLine('|---|---|---|---|---|')
         foreach ($c in $Summary.SecurityControls) {
-            [void]$sb.AppendLine("| $($c.ControlId) | $($c.Scope) | $($c.Status) | $($c.Priority) | $($c.EffectiveRecommendation) |")
+            [void]$sb.AppendLine("| $($c.ControlId) | $(Get-PropertyOrNull -Object $c -Name 'Scope') | $($c.Status) | $($c.Priority) | $($c.EffectiveRecommendation) |")
         }
         [void]$sb.AppendLine()
         [void]$sb.AppendLine('This is a v0.1 partial control set. See SECURITY-AUDIT.md for the full control catalogue and status model; not every documented control is implemented yet.')

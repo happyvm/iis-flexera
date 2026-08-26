@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # Read-only Microsoft-vs-Flexera IIS security audit.
 #
 # Every control below is a pure decision function: given observed values,

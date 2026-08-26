@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # Statistical helpers shared by the analyzer and the report generator.
 #
 # Flexera does not publish universal performance thresholds, so this file

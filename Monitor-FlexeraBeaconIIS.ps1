@@ -23,6 +23,7 @@ param(
     [string]$AppPoolName
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'src/Discovery.ps1')
@@ -101,12 +102,14 @@ try {
 
 # Log-field completeness preflight (SPECIFICATION.md section 16): explain
 # which analyses will be unavailable rather than silently fabricating them
-# once the run finishes.
-foreach ($siteLogging in @($baseline.Logging)) {
-    if ($siteLogging.AllRequiredFieldsPresent) { continue }
+# once the run finishes. $baseline can be $null if the capture above failed.
+if ($baseline) {
+    foreach ($siteLogging in @($baseline.Logging)) {
+        if ($siteLogging.AllRequiredFieldsPresent) { continue }
 
-    foreach ($missing in @($siteLogging.MissingFields)) {
-        Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Site '$($siteLogging.SiteName)' W3C logging is missing field '$($missing.Field)': $($missing.Impact)."
+        foreach ($missing in @($siteLogging.MissingFields)) {
+            Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Site '$($siteLogging.SiteName)' W3C logging is missing field '$($missing.Field)': $($missing.Impact)."
+        }
     }
 }
 
@@ -199,18 +202,22 @@ while ((Get-Date) -lt $endTime) {
                     $webSample = Get-WebServiceSample -SiteCounterInstance $site.Name
                     $queueSample = Get-HttpSysQueueSample -QueueInstance $poolName
 
+                    # Get-WebServiceSample/Get-HttpSysQueueSample return $null when no
+                    # counter for that instance was available (SPECIFICATION.md 7.3/8.1);
+                    # under strict mode, property access on that $null throws instead of
+                    # silently yielding $null, so it must be guarded explicitly here.
                     $row = [pscustomobject]@{
                         Timestamp                = $tickStart.ToString('o')
                         SiteName                 = $site.Name
                         AppPoolName              = $poolName
-                        CurrentConnections       = $webSample.CurrentConnections
-                        ConnectionAttemptsPerSec = $webSample.ConnectionAttemptsPerSec
-                        RequestsPerSec           = $webSample.TotalMethodRequestsPerSec
-                        BytesReceivedPerSec      = $webSample.BytesReceivedPerSec
-                        BytesSentPerSec          = $webSample.BytesSentPerSec
-                        QueueSize                = $queueSample.CurrentQueueSize
-                        RejectedRequests         = $queueSample.RejectedRequests
-                        ArrivalRate              = $queueSample.ArrivalRate
+                        CurrentConnections       = if ($webSample) { $webSample.CurrentConnections } else { $null }
+                        ConnectionAttemptsPerSec = if ($webSample) { $webSample.ConnectionAttemptsPerSec } else { $null }
+                        RequestsPerSec           = if ($webSample) { $webSample.TotalMethodRequestsPerSec } else { $null }
+                        BytesReceivedPerSec      = if ($webSample) { $webSample.BytesReceivedPerSec } else { $null }
+                        BytesSentPerSec          = if ($webSample) { $webSample.BytesSentPerSec } else { $null }
+                        QueueSize                = if ($queueSample) { $queueSample.CurrentQueueSize } else { $null }
+                        RejectedRequests         = if ($queueSample) { $queueSample.RejectedRequests } else { $null }
+                        ArrivalRate              = if ($queueSample) { $queueSample.ArrivalRate } else { $null }
                     }
                     $exists = Test-Path -LiteralPath $countersPath
                     $row | Export-Csv -Path $countersPath -NoTypeInformation -Append:$exists -Encoding UTF8

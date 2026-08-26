@@ -33,6 +33,7 @@ param(
     [string]$Date
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'src/IisLogs.ps1')

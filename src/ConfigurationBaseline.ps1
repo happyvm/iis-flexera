@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # Read-only Flexera IIS configuration-baseline snapshot.
 #
 # Captures the configuration evidence described in FLEXERA-IIS-BASELINE.md
