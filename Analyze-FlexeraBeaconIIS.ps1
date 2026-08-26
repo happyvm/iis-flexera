@@ -113,6 +113,9 @@ if ($LogPath) {
     if ($logSet.MalformedCount -gt 0) {
         $logWarnings.Add("Skipped $($logSet.MalformedCount) malformed IIS log row(s).") | Out-Null
     }
+    foreach ($unreadable in @($logSet.UnreadableFiles)) {
+        $logWarnings.Add("Could not read IIS log file '$($unreadable.Path)': $($unreadable.Error)") | Out-Null
+    }
     $requests = @($logSet.Records | ForEach-Object { ConvertTo-NormalizedRequestRecord -Record $_ })
 
     if ($targetDate) {

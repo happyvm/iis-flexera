@@ -39,6 +39,35 @@ Describe 'Read-W3CLogFile' {
     It 'throws for a missing file' {
         { Read-W3CLogFile -Path (Join-Path $fixtureDir 'does-not-exist.log') } | Should -Throw
     }
+
+    It 'reads a file another handle holds open for writing, like IIS actively logging to it' {
+        $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("iis-flexera-locktest-{0}.log" -f ([guid]::NewGuid()))
+        Set-Content -Path $tempFile -Value "#Fields: date time cs-method`n2026-08-26 00:00:01 GET"
+
+        $lockStream = [System.IO.File]::Open($tempFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        try {
+            $result = Read-W3CLogFile -Path $tempFile
+            $result.RecordCount | Should -Be 1
+        }
+        finally {
+            $lockStream.Dispose()
+            Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'throws after retrying when the file stays exclusively locked' {
+        $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("iis-flexera-locktest-{0}.log" -f ([guid]::NewGuid()))
+        Set-Content -Path $tempFile -Value "#Fields: date time`n2026-08-26 00:00:01 12:00:00"
+
+        $lockStream = [System.IO.File]::Open($tempFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            { Read-W3CLogFile -Path $tempFile -MaxOpenAttempts 2 -RetryDelayMilliseconds 10 } | Should -Throw
+        }
+        finally {
+            $lockStream.Dispose()
+            Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Read-W3CLogSet' {
@@ -62,6 +91,27 @@ Describe 'Read-W3CLogSet' {
     It 'expands a directory into its *.log files' {
         $result = Read-W3CLogSet -Path @($fixtureDir)
         $result.Files.Count | Should -Be 3
+    }
+
+    It 'skips an unreadable (locked) file, keeps the rest, and reports it rather than aborting' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("iis-flexera-locktest-{0}" -f ([guid]::NewGuid()))
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        $goodFile = Join-Path $dir 'u_ex260825.log'
+        $lockedFile = Join-Path $dir 'u_ex260826.log'
+        Set-Content -Path $goodFile -Value "#Fields: date time`n2026-08-25 00:00:01"
+        Set-Content -Path $lockedFile -Value "#Fields: date time`n2026-08-26 00:00:01"
+
+        $lockStream = [System.IO.File]::Open($lockedFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            $result = Read-W3CLogSet -Path @($dir)
+            $result.Records.Count | Should -Be 1
+            $result.UnreadableFiles.Count | Should -Be 1
+            $result.UnreadableFiles[0].Path | Should -Match 'u_ex260826\.log$'
+        }
+        finally {
+            $lockStream.Dispose()
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -98,6 +148,18 @@ Describe 'Get-W3CLogFileSet -SinceDate pre-filter' {
         $oldFile = Join-Path $logDir 'u_ex260818.log'
         $files = @(Get-W3CLogFileSet -Path @($oldFile) -SinceDate (Get-Date '2026-08-20'))
         $files.Count | Should -Be 1
+    }
+
+    It 'skips a file created after the target day, e.g. tomorrow''s still-open log' {
+        $futureFile = Join-Path $logDir 'u_ex260821.log'
+        Set-Content -Path $futureFile -Value '#Fields: date time'
+        (Get-Item $futureFile).CreationTime = (Get-Date '2026-08-21T00:00:05')
+        (Get-Item $futureFile).LastWriteTime = (Get-Date '2026-08-21T08:00:00')
+
+        # LastWriteTime alone would keep this file (it is on/after -SinceDate);
+        # only the CreationTime check should exclude it.
+        $files = @(Get-W3CLogFileSet -Path @($logDir) -SinceDate (Get-Date '2026-08-20'))
+        $files | Where-Object { $_ -match 'u_ex260821\.log$' } | Should -BeNullOrEmpty
     }
 }
 

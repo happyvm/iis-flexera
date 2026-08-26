@@ -23,49 +23,77 @@ function Read-W3CLogFile {
         "#Fields:") are consumed for schema discovery. Data rows whose
         token count does not match the declared field count are counted
         as malformed and skipped rather than aborting the whole file.
+
+        Opens with FileShare.ReadWrite/Delete rather than .NET's default
+        FileShare.Read, and retries briefly on a sharing violation, so a
+        file IIS itself currently has open for writing - most commonly
+        today's active log - can still be read instead of throwing "The
+        process cannot access the file... being used by another
+        process." Still throws if the file cannot be opened after
+        retrying; Read-W3CLogSet treats that as a per-file warning rather
+        than aborting the whole multi-file read.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Path
+        [Parameter(Mandatory)][string]$Path,
+        [int]$MaxOpenAttempts = 4,
+        [int]$RetryDelayMilliseconds = 250
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "IIS log file not found: $Path"
     }
 
+    $reader = $null
+    $attempt = 0
+    while (-not $reader) {
+        $attempt++
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            $reader = New-Object System.IO.StreamReader($stream)
+        } catch [System.IO.IOException] {
+            if ($attempt -ge $MaxOpenAttempts) { throw }
+            Start-Sleep -Milliseconds $RetryDelayMilliseconds
+        }
+    }
+
     $fields = $null
     $malformedCount = 0
     $records = New-Object System.Collections.Generic.List[object]
 
-    foreach ($line in [System.IO.File]::ReadLines($Path)) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    try {
+        while ($null -ne ($line = $reader.ReadLine())) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
 
-        if ($line.StartsWith('#')) {
-            if ($line.StartsWith('#Fields:')) {
-                $fields = ConvertFrom-W3CFieldsLine -Line $line
+            if ($line.StartsWith('#')) {
+                if ($line.StartsWith('#Fields:')) {
+                    $fields = ConvertFrom-W3CFieldsLine -Line $line
+                }
+                continue
             }
-            continue
+
+            if (-not $fields) {
+                # A data row appeared before any #Fields: header was seen.
+                $malformedCount++
+                continue
+            }
+
+            $values = $line -split ' '
+
+            if ($values.Count -ne $fields.Count) {
+                $malformedCount++
+                continue
+            }
+
+            $record = [ordered]@{}
+            for ($i = 0; $i -lt $fields.Count; $i++) {
+                $record[$fields[$i]] = $values[$i]
+            }
+
+            $records.Add([pscustomobject]$record) | Out-Null
         }
-
-        if (-not $fields) {
-            # A data row appeared before any #Fields: header was seen.
-            $malformedCount++
-            continue
-        }
-
-        $values = $line -split ' '
-
-        if ($values.Count -ne $fields.Count) {
-            $malformedCount++
-            continue
-        }
-
-        $record = [ordered]@{}
-        for ($i = 0; $i -lt $fields.Count; $i++) {
-            $record[$fields[$i]] = $values[$i]
-        }
-
-        $records.Add([pscustomobject]$record) | Out-Null
+    } finally {
+        $reader.Dispose()
     }
 
     [pscustomobject]@{
@@ -83,17 +111,26 @@ function Get-W3CLogFileSet {
         concrete *.log files. Observation runs are not guaranteed to fit
         in a single file (log rotation) - SPECIFICATION.md section 9.4.
 
-        -SinceDate is an optional, deliberately one-sided pre-filter for
-        directory expansion only (an explicitly named file is always
-        included - the caller pointed at it on purpose): it skips a file
-        whose LastWriteTime is before that date, since an append-only IIS
-        log can never contain entries from that date or later without
-        having been written to on or after it. It never skips a file for
-        being "too late" (e.g. Weekly/Monthly/Unlimited/MaxSize log
-        rotation can leave one file's LastWriteTime long after some of
-        its actual content's dates), so it can only reduce work, never
-        silently drop data - Select-ByDate on the parsed records remains
-        the authoritative filter.
+        -SinceDate is an optional pre-filter for directory expansion only
+        (an explicitly named file is always included - the caller
+        pointed at it on purpose), built from two independently-safe
+        checks that can only ever reduce work, never silently drop data
+        (Select-ByDate on the parsed records remains the authoritative
+        filter either way):
+          - skip a file whose LastWriteTime is before that date: an
+            append-only IIS log can't contain entries from that date or
+            later without having been written to on or after it;
+          - skip a file whose CreationTime is on/after the day *after*
+            that date: nothing in a file can predate the file's own
+            creation, so it cannot hold entries from a day that had
+            already ended before the file existed. This is what keeps a
+            query for yesterday from touching today's still-open,
+            actively-written log file.
+        Neither check assumes a rotation period (Daily/Weekly/Monthly/
+        Unlimited/MaxSize): a file whose CreationTime predates the target
+        day and whose LastWriteTime is on/after it is always kept,
+        because it could plausibly span into that day regardless of how
+        the admin configured rollover.
     #>
     [CmdletBinding()]
     param(
@@ -107,7 +144,11 @@ function Get-W3CLogFileSet {
         if (Test-Path -LiteralPath $p -PathType Container) {
             $candidates = Get-ChildItem -LiteralPath $p -Filter '*.log' -File
             if ($SinceDate) {
-                $candidates = $candidates | Where-Object { $_.LastWriteTime -ge $SinceDate.Date }
+                $dayStart = $SinceDate.Date
+                $dayAfter = $dayStart.AddDays(1)
+                $candidates = $candidates | Where-Object {
+                    ($_.LastWriteTime -ge $dayStart) -and ($_.CreationTime -lt $dayAfter)
+                }
             }
             $candidates |
                 Sort-Object Name |
@@ -148,9 +189,19 @@ function Read-W3CLogSet {
     $allRecords = New-Object System.Collections.Generic.List[object]
     $totalMalformed = 0
     $fieldSets = New-Object System.Collections.Generic.List[object]
+    $unreadableFiles = New-Object System.Collections.Generic.List[object]
 
     foreach ($file in $files) {
-        $result = Read-W3CLogFile -Path $file
+        try {
+            $result = Read-W3CLogFile -Path $file
+        } catch {
+            # A single locked/unreadable file (e.g. today's active log,
+            # momentarily locked by IIS) does not abort the whole
+            # multi-file read - "fail partially, not completely".
+            $unreadableFiles.Add([pscustomobject]@{ Path = $file; Error = $_.Exception.Message }) | Out-Null
+            continue
+        }
+
         $totalMalformed += $result.MalformedCount
         $fieldSets.Add([pscustomobject]@{ Path = $file; Fields = $result.Fields }) | Out-Null
 
@@ -170,6 +221,7 @@ function Read-W3CLogSet {
         FieldsConsistent = (@($distinctFieldSets).Count -le 1)
         Records          = $allRecords
         MalformedCount   = $totalMalformed
+        UnreadableFiles  = $unreadableFiles.ToArray()
     }
 }
 
