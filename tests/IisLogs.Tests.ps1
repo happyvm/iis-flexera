@@ -162,6 +162,20 @@ Describe 'Get-W3CLogFileSet -SinceDate pre-filter' {
         $files = @(Get-W3CLogFileSet -Path @($logDir) -SinceDate (Get-Date '2026-08-20'))
         $files | Where-Object { $_ -match 'u_ex260821\.log$' } | Should -BeNullOrEmpty
     }
+
+    It 'widens the window to a period when -UntilDate is given' {
+        $periodFile = Join-Path $logDir 'u_ex260824.log'
+        Set-Content -Path $periodFile -Value '#Fields: date time'
+        (Get-Item $periodFile).CreationTime = (Get-Date '2026-08-24T00:00:05')
+        (Get-Item $periodFile).LastWriteTime = (Get-Date '2026-08-24T08:00:00')
+
+        $files = @(Get-W3CLogFileSet -Path @($logDir) -SinceDate (Get-Date '2026-08-20') -UntilDate (Get-Date '2026-08-26'))
+        $files | Where-Object { $_ -match 'u_ex260824\.log$' } | Should -Not -BeNullOrEmpty
+    }
+
+    It 'throws when -UntilDate is given without -SinceDate' {
+        { Get-W3CLogFileSet -Path @($logDir) -UntilDate (Get-Date '2026-08-26') } | Should -Throw
+    }
 }
 
 Describe 'ConvertTo-NormalizedRequestRecord' {

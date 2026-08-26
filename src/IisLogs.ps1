@@ -121,22 +121,30 @@ function Get-W3CLogFileSet {
             append-only IIS log can't contain entries from that date or
             later without having been written to on or after it;
           - skip a file whose CreationTime is on/after the day *after*
-            that date: nothing in a file can predate the file's own
-            creation, so it cannot hold entries from a day that had
-            already ended before the file existed. This is what keeps a
-            query for yesterday from touching today's still-open,
-            actively-written log file.
+            that date (or after -UntilDate, when a period is requested):
+            nothing in a file can predate the file's own creation, so it
+            cannot hold entries from a day that had already ended before
+            the file existed. This is what keeps a query for yesterday
+            from touching today's still-open, actively-written log file.
         Neither check assumes a rotation period (Daily/Weekly/Monthly/
         Unlimited/MaxSize): a file whose CreationTime predates the target
         day and whose LastWriteTime is on/after it is always kept,
         because it could plausibly span into that day regardless of how
         the admin configured rollover.
+
+        -UntilDate widens the window to a period [SinceDate, UntilDate]
+        instead of a single day, and requires -SinceDate.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path,
-        [datetime]$SinceDate
+        [datetime]$SinceDate,
+        [datetime]$UntilDate
     )
+
+    if ($UntilDate -and -not $SinceDate) {
+        throw '-UntilDate requires -SinceDate.'
+    }
 
     $files = New-Object System.Collections.Generic.List[string]
 
@@ -145,7 +153,7 @@ function Get-W3CLogFileSet {
             $candidates = Get-ChildItem -LiteralPath $p -Filter '*.log' -File
             if ($SinceDate) {
                 $dayStart = $SinceDate.Date
-                $dayAfter = $dayStart.AddDays(1)
+                $dayAfter = if ($UntilDate) { $UntilDate.Date.AddDays(1) } else { $dayStart.AddDays(1) }
                 $candidates = $candidates | Where-Object {
                     ($_.LastWriteTime -ge $dayStart) -and ($_.CreationTime -lt $dayAfter)
                 }
@@ -172,19 +180,22 @@ function Read-W3CLogSet {
         a mismatch across rotated files is useful collection-quality
         information for the report rather than a silent inconsistency.
 
-        -SinceDate is passed straight through to Get-W3CLogFileSet as a
-        pre-filter over which files get parsed at all - see that
-        function's comment for why it only ever skips files that
-        provably cannot contain the target date, never the reverse.
+        -SinceDate and -UntilDate are passed straight through to
+        Get-W3CLogFileSet as a pre-filter over which files get parsed at
+        all - see that function's comment for why it only ever skips
+        files that provably cannot contain the target date/period, never
+        the reverse.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Path,
-        [datetime]$SinceDate
+        [datetime]$SinceDate,
+        [datetime]$UntilDate
     )
 
     $fileSetParams = @{ Path = $Path }
     if ($SinceDate) { $fileSetParams['SinceDate'] = $SinceDate }
+    if ($UntilDate) { $fileSetParams['UntilDate'] = $UntilDate }
     $files = Get-W3CLogFileSet @fileSetParams
     $allRecords = New-Object System.Collections.Generic.List[object]
     $totalMalformed = 0

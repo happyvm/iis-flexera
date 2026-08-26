@@ -263,7 +263,7 @@ Implementation has started, following [`SPECIFICATION.md`](SPECIFICATION.md), [`
 Current state (v0.1, in progress):
 
 - `Monitor-FlexeraBeaconIIS.ps1` — preflight (discovery, configuration baseline, security audit) plus the timed CSV/JSON collection loop.
-- `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`. Pass `-Date 2026-08-25` to restrict the report to a single calendar day (local time) - out of a multi-day `Monitor-FlexeraBeaconIIS.ps1` run, or by pointing `-LogPath` directly at one day's IIS log file(s) without ever having run the collector.
+- `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`. Pass `-Date 2026-08-25` to restrict the report to a single calendar day (local time), or `-Date 2026-08-20 -EndDate 2026-08-26` to restrict it to a multi-day period - out of a multi-day `Monitor-FlexeraBeaconIIS.ps1` run, or by pointing `-LogPath` directly at the relevant IIS log file(s)/directory without ever having run the collector. Either way, `-Date`/`-EndDate` are also used to pre-filter which rotated log files get parsed at all, so a narrow window stays cheap even when `-LogPath` points at a directory holding a long history of logs.
 - `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. Counter paths are resolved once per site/queue and cached for the run; all tracked worker PIDs share one CIM query per tick. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
 - Timed CSV collection keeps its output streams open and flushes after each write, avoiding per-row file reopen and existence checks while retaining incremental durability.
 - `src/IisLogs.ps1`, `src/Statistics.ps1` — header-driven W3C log parsing and percentile/status statistics. Platform-independent; covered by Pester tests in `tests/`.
@@ -283,10 +283,12 @@ registry, or any Flexera setting.
 Collector CSV and metadata timestamps are emitted as ISO 8601 UTC values. W3C IIS
 `date`/`time` fields are interpreted as UTC, as defined by the W3C IIS log format.
 Analysis normalizes every source to UTC before filtering. `-Date` denotes a calendar
-day in the analyzer machine timezone by default; use `-DateTimeZoneId` to select the
-Beacon/report timezone explicitly. `-DisplayTimeZone UTC|Local|Both` controls report
-display without changing filtering or calculations. DST-aware UTC boundaries are
-used rather than comparing `YYYY-MM-DD` strings.
+day in the analyzer machine timezone by default; add `-EndDate` (on/after `-Date`)
+to widen the window to an inclusive multi-day period instead. Use `-DateTimeZoneId`
+to select the Beacon/report timezone explicitly. `-DisplayTimeZone UTC|Local|Both`
+controls report display without changing filtering or calculations. DST-aware UTC
+boundaries are used rather than comparing `YYYY-MM-DD` strings, independently for
+the first and last day of the period.
 
 Optional inputs are classified as `ABSENT`, `EMPTY`, `INVALID`, `PRESENT`, or
 `OUTSIDE_PERIOD` in the Data Quality report section. Thus an existing counter file
