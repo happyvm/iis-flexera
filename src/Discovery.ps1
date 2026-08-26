@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # IIS/Flexera topology discovery.
 #
 # ManageSoftRL/ManageSoftDL are discovery hints, not proof of a fixed

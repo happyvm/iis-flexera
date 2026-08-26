@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # IIS/HTTP.sys performance-counter collection.
 #
 # Counter names vary slightly across Windows/IIS versions, so every

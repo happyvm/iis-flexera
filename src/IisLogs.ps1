@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # IIS W3C extended log parsing.
 #
 # Field order in a W3C log is configurable per site, so the parser always

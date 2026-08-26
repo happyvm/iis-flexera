@@ -247,7 +247,7 @@ Describe 'Invoke-FlexeraSecurityAudit' {
         $topology = [pscustomobject]@{ SelectedSites = @(); SelectedAppPools = @() }
         $baseline = [pscustomobject]@{ Endpoints = @(); Logging = @(); AuthenticationConsistency = @() }
 
-        $controls = Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline
+        $controls = @(Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline)
         $controls.Count | Should -Be 0
     }
 }

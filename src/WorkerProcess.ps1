@@ -1,3 +1,5 @@
+Set-StrictMode -Version Latest
+
 # AppPool -> w3wp.exe worker-process mapping and lifecycle tracking.
 #
 # A PID is not stable for the duration of a multi-day run: IIS can recycle
