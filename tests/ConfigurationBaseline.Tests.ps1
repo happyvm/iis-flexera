@@ -44,7 +44,7 @@ Describe 'Get-AuthenticationConsistencyFinding' {
 
 Describe 'Test-RequiredW3CFieldsPresent' {
     It 'reports all fields present when every required field is enabled' {
-        $fields = @('date', 'time', 's-sitename', 'cs-method', 'cs-uri-stem', 'cs-uri-query', 'sc-status', 'sc-substatus', 'sc-win32-status', 'cs-bytes', 'sc-bytes', 'time-taken')
+        $fields = @('date', 'time', 's-sitename', 'cs-method', 'cs-uri-stem', 'cs-uri-query', 'sc-status', 'sc-substatus', 'sc-win32-status', 'cs-bytes', 'sc-bytes', 'time-taken', 'c-ip', 'cs(User-Agent)')
         $result = Test-RequiredW3CFieldsPresent -EnabledFields $fields
         $result.AllRequiredFieldsPresent | Should -Be $true
         $result.MissingFields.Count | Should -Be 0
@@ -60,6 +60,6 @@ Describe 'Test-RequiredW3CFieldsPresent' {
     It 'handles logging that is completely disabled (no fields enabled)' {
         $result = Test-RequiredW3CFieldsPresent -EnabledFields @()
         $result.AllRequiredFieldsPresent | Should -Be $false
-        $result.MissingFields.Count | Should -Be 11
+        $result.MissingFields.Count | Should -Be 13
     }
 }

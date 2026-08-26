@@ -92,6 +92,43 @@ function Get-RequestFilteringExtensionState {
     return $result
 }
 
+function Get-IisRequestFilteringConfiguration {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SitePath)
+
+    Import-WebAdministrationModule
+    $section = Get-WebConfiguration -Filter 'system.webServer/security/requestFiltering' -PSPath $SitePath -ErrorAction Stop
+    [pscustomobject]@{
+        AllowUnlistedVerbs = $section.verbs.allowUnlisted
+        Verbs = @($section.verbs.Collection | ForEach-Object { [pscustomobject]@{ Verb = "$($_.verb)"; Allowed = $_.allowed } })
+        AllowUnlistedFileExtensions = $section.fileExtensions.allowUnlisted
+        FileExtensions = @($section.fileExtensions.Collection | ForEach-Object { [pscustomobject]@{ Extension = "$($_.fileExtension)"; Allowed = $_.allowed } })
+        HiddenSegments = @($section.hiddenSegments.Collection | ForEach-Object { "$($_.segment)" })
+        MaxAllowedContentLength = $section.requestLimits.maxAllowedContentLength
+        MaxUrl = $section.requestLimits.maxUrl
+        MaxQueryString = $section.requestLimits.maxQueryString
+    }
+}
+
+function Get-IisHandlerAndModuleConfiguration {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SitePath)
+
+    Import-WebAdministrationModule
+    $handlers = Get-WebConfiguration -Filter 'system.webServer/handlers' -PSPath $SitePath -ErrorAction Stop
+    $modules = Get-WebConfiguration -Filter 'system.webServer/modules' -PSPath $SitePath -ErrorAction Stop
+    [pscustomobject]@{
+        Handlers = @($handlers.Collection | ForEach-Object {
+            [pscustomobject]@{
+                Name = "$($_.name)"; Path = "$($_.path)"; Verb = "$($_.verb)"; Modules = "$($_.modules)"
+                ScriptProcessor = "$($_.scriptProcessor)"; ResourceType = "$($_.resourceType)"
+                RequireAccess = "$($_.requireAccess)"; PreCondition = "$($_.preCondition)"
+            }
+        })
+        Modules = @($modules.Collection | ForEach-Object { [pscustomobject]@{ Name = "$($_.name)"; PreCondition = "$($_.preCondition)" } })
+    }
+}
+
 function Get-IisAuthenticationState {
     <#
         Reads the effective Anonymous/Basic/Windows authentication state
@@ -230,6 +267,8 @@ function Get-IisLoggingConfiguration {
         'UriStem' = 'cs-uri-stem'; 'UriQuery' = 'cs-uri-query'; 'HttpStatus' = 'sc-status'
         'HttpSubStatus' = 'sc-substatus'; 'Win32Status' = 'sc-win32-status'
         'BytesRecv' = 'cs-bytes'; 'BytesSent' = 'sc-bytes'; 'TimeTaken' = 'time-taken'
+        'ClientIP' = 'c-ip'; 'ServerIP' = 's-ip'; 'UserAgent' = 'cs(User-Agent)'
+        'UserName' = 'cs-username'; 'Host' = 'cs-host'; 'ProtocolVersion' = 'cs-version'
     }
 
     try {
@@ -283,6 +322,8 @@ function Test-RequiredW3CFieldsPresent {
         'cs-bytes'        = 'inbound request-byte analysis is unavailable'
         'sc-bytes'        = 'outbound response-byte analysis is unavailable'
         'time-taken'      = 'latency percentiles (P50/P95/P99) are unavailable'
+        'c-ip'            = 'HTTP 405 responses cannot be attributed to a client; this field is currently not logged and enabling it would improve diagnostics'
+        'cs(User-Agent)'  = 'agent/client software cannot be distinguished; this field is currently not logged and enabling it would improve diagnostics'
     }
 
     $missing = New-Object System.Collections.Generic.List[object]
@@ -336,6 +377,8 @@ function New-FlexeraConfigurationBaseline {
         $webDav = 'Unknown'
         $requestFiltering = [ordered]@{}
         $authentication = $null
+        $requestFilteringDetail = $null
+        $handlerAndModules = $null
 
         try { $webDav = Get-WebDavState -SitePath $sitePath }
         catch { $warnings.Add("WebDAV check failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
@@ -346,6 +389,12 @@ function New-FlexeraConfigurationBaseline {
         try { $authentication = Get-IisAuthenticationState -SitePath $sitePath }
         catch { $warnings.Add("Authentication check failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
 
+        try { $requestFilteringDetail = Get-IisRequestFilteringConfiguration -SitePath $sitePath }
+        catch { $warnings.Add("Detailed Request Filtering capture failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
+
+        try { $handlerAndModules = Get-IisHandlerAndModuleConfiguration -SitePath $sitePath }
+        catch { $warnings.Add("Handler/module capture failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
+
         [pscustomobject]@{
             Name             = $endpoint.EndpointName
             Site             = $endpoint.SiteName
@@ -355,6 +404,9 @@ function New-FlexeraConfigurationBaseline {
             WebDav           = $webDav
             RequestFiltering = $requestFiltering
             Authentication   = $authentication
+            RequestFilteringDetail = $requestFilteringDetail
+            Handlers         = if ($handlerAndModules) { $handlerAndModules.Handlers } else { @() }
+            Modules          = if ($handlerAndModules) { $handlerAndModules.Modules } else { @() }
         }
     }
     $endpointBaselines = @($endpointBaselines)
@@ -394,8 +446,8 @@ function New-FlexeraConfigurationBaseline {
     $authConsistencyFindings = @($authConsistencyFindings)
 
     [pscustomobject]@{
-        FlexeraBaselineVersion     = 1
-        CapturedAt                 = (Get-Date).ToString('o')
+        FlexeraBaselineVersion     = 2
+        CapturedAt                 = (Get-Date).ToUniversalTime().ToString('o')
         Iis                        = [pscustomobject]@{
             Version      = $Topology.IisVersion
             RoleServices = $roleServiceStatus

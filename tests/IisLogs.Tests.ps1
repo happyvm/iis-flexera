@@ -1,4 +1,5 @@
 BeforeAll {
+    . "$PSScriptRoot/../src/Time.ps1"
     . "$PSScriptRoot/../src/IisLogs.ps1"
     $fixtureDir = Join-Path $PSScriptRoot '../fixtures/iis-logs'
 }
@@ -178,5 +179,19 @@ Describe 'ConvertTo-NormalizedRequestRecord' {
         $normalized = ConvertTo-NormalizedRequestRecord -Record $record
         $normalized.TimeTakenMs | Should -BeNullOrEmpty
         $normalized.StatusCode | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'optional W3C fields' {
+    It 'normalizes diagnostic fields when present without requiring them' {
+        $record = [pscustomobject]@{
+            date='2026-08-26'; time='12:00:00'; 'c-ip'='10.0.0.1'; 's-ip'='10.0.0.2'
+            'cs(User-Agent)'='Flexera-Agent'; 'cs-username'='-'; 'cs-host'='beacon.example'; 'cs-version'='HTTP/1.1'
+        }
+        $result = ConvertTo-NormalizedRequestRecord $record
+        $result.Timestamp.Kind | Should -Be ([DateTimeKind]::Utc)
+        $result.ClientIp | Should -Be '10.0.0.1'
+        $result.AuthenticatedUser | Should -BeNullOrEmpty
+        $result.ProtocolVersion | Should -Be 'HTTP/1.1'
     }
 }

@@ -1,4 +1,5 @@
 BeforeAll {
+    . "$PSScriptRoot/../src/Time.ps1"
     . "$PSScriptRoot/../src/Statistics.ps1"
     . "$PSScriptRoot/../src/Reporting.ps1"
 }
@@ -33,6 +34,11 @@ Describe 'New-CollectionReport' {
             ConfigurationBaseline  = $null
             TrafficByPeriod        = @()
             TrafficGranularity     = 'Hour'
+            Http405Analysis        = [pscustomobject]@{
+                Count=2; PercentageOfAllRequests=20
+                ByMethod=@([pscustomobject]@{ Method='POST'; Count=2; PercentageOf405=100; SubStatuses='0, 0 (2)' })
+                ByEndpoint=@(); ByClient=@(); ByHourUtc=@()
+            }
         }
 
         $outFile = Join-Path ([System.IO.Path]::GetTempPath()) ("report-{0}.md" -f ([guid]::NewGuid()))
@@ -42,10 +48,11 @@ Describe 'New-CollectionReport' {
 
             $content | Should -Match '# Flexera Beacon IIS Observation Report'
             $content | Should -Match '## 1. Executive summary'
-            $content | Should -Match '## 11. Capacity observations'
-            $content | Should -Match '## 12. Collection limitations/warnings'
-            $content | Should -Match '## 13. Security configuration assessment'
-            $content | Should -Match '## 14. Flexera prerequisites & configuration baseline'
+            $content | Should -Match '## 2. Data Quality'
+            $content | Should -Match '## 6. HTTP 405 Investigation'
+            $content | Should -Match 'HTTP 405 responses: 2 \(20%'
+            $content | Should -Match '## 15. Security Audit'
+            $content | Should -Match '## 14. Configuration Baseline'
             $content | Should -Match 'example warning'
         }
         finally {

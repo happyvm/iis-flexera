@@ -252,17 +252,61 @@ function Get-IisAppPoolInfo {
     try { $state = (Get-WebAppPoolState -Name $Name -ErrorAction Stop).Value }
     catch { $state = $null }
 
+    $schedule = @()
+    try { $schedule = @($pool.recycling.periodicRestart.schedule.Collection | ForEach-Object { "$($_.value)" }) } catch { $schedule = @() }
+
     [pscustomobject]@{
-        Name            = $Name
-        State           = $state
-        QueueLength     = $pool.queueLength
-        MaxProcesses    = $pool.processModel.maxProcesses
-        IdentityType    = $pool.processModel.identityType
-        UserName        = $pool.processModel.userName
-        PipelineMode    = $pool.managedPipelineMode
-        RuntimeVersion  = $pool.managedRuntimeVersion
-        StartMode       = $pool.startMode
-        LoadUserProfile = $pool.processModel.loadUserProfile
+        Name                    = $Name
+        State                   = $state
+        ManagedRuntimeVersion   = "$($pool.managedRuntimeVersion)"
+        ManagedPipelineMode     = "$($pool.managedPipelineMode)"
+        AutoStart               = $pool.autoStart
+        StartMode               = "$($pool.startMode)"
+        Enable32BitAppOnWin64   = $pool.enable32BitAppOnWin64
+        QueueLength             = $pool.queueLength
+        ProcessModel = [pscustomobject]@{
+            IdentityType = "$($pool.processModel.identityType)"
+            # Account name is configuration metadata; no password or secret is read.
+            UserName = "$($pool.processModel.userName)"
+            LoadUserProfile = $pool.processModel.loadUserProfile
+            MaxProcesses = $pool.processModel.maxProcesses
+            IdleTimeout = "$($pool.processModel.idleTimeout)"
+            IdleTimeoutAction = "$($pool.processModel.idleTimeoutAction)"
+            PingingEnabled = $pool.processModel.pingingEnabled
+            PingInterval = "$($pool.processModel.pingInterval)"
+            PingResponseTime = "$($pool.processModel.pingResponseTime)"
+            StartupTimeLimit = "$($pool.processModel.startupTimeLimit)"
+            ShutdownTimeLimit = "$($pool.processModel.shutdownTimeLimit)"
+            LogEventOnProcessModel = "$($pool.processModel.logEventOnProcessModel)"
+        }
+        Recycling = [pscustomobject]@{
+            PeriodicRestartTime = "$($pool.recycling.periodicRestart.time)"
+            PeriodicRestartRequests = $pool.recycling.periodicRestart.requests
+            PeriodicRestartMemory = $pool.recycling.periodicRestart.memory
+            PeriodicRestartPrivateMemory = $pool.recycling.periodicRestart.privateMemory
+            Schedule = $schedule
+            DisallowOverlappingRotation = $pool.recycling.disallowOverlappingRotation
+            DisallowRotationOnConfigChange = $pool.recycling.disallowRotationOnConfigChange
+        }
+        Failure = [pscustomobject]@{
+            RapidFailProtection = $pool.failure.rapidFailProtection
+            RapidFailProtectionInterval = "$($pool.failure.rapidFailProtectionInterval)"
+            RapidFailProtectionMaxCrashes = $pool.failure.rapidFailProtectionMaxCrashes
+        }
+        Cpu = [pscustomobject]@{
+            Limit = $pool.cpu.limit
+            Action = "$($pool.cpu.action)"
+            ResetInterval = "$($pool.cpu.resetInterval)"
+            ProcessorAffinityEnabled = $pool.cpu.smpAffinitized
+            ProcessorAffinityMask = "$($pool.cpu.smpProcessorAffinityMask)"
+        }
+        # Backward-compatible flattened properties used by existing rules.
+        MaxProcesses            = $pool.processModel.maxProcesses
+        IdentityType            = "$($pool.processModel.identityType)"
+        UserName                = "$($pool.processModel.userName)"
+        PipelineMode            = "$($pool.managedPipelineMode)"
+        RuntimeVersion          = "$($pool.managedRuntimeVersion)"
+        LoadUserProfile         = $pool.processModel.loadUserProfile
     }
 }
 

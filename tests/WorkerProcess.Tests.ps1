@@ -1,4 +1,5 @@
 BeforeAll {
+    . "$PSScriptRoot/../src/Time.ps1"
     . "$PSScriptRoot/../src/WorkerProcess.ps1"
 }
 
@@ -64,5 +65,37 @@ Describe 'Get-NormalizedCpuPercent' {
 
     It 'returns the raw value unchanged when the processor count is unknown' {
         Get-NormalizedCpuPercent -RawPercentProcessorTime 42 -LogicalProcessorCount 0 | Should -Be 42
+    }
+}
+
+Describe 'Get-ProcessSamples' {
+    It 'queries the formatted performance provider once for every tracked PID' {
+        Mock Get-CimInstance {
+            if ($ClassName -eq 'Win32_Process') {
+                return @(
+                    [pscustomobject]@{ ProcessId = 101; CreationDate = '2026-08-26T10:00:00+00:00'; KernelModeTime = 10000000; UserModeTime = 20000000 },
+                    [pscustomobject]@{ ProcessId = 202; CreationDate = '2026-08-26T10:01:00+00:00'; KernelModeTime = 20000000; UserModeTime = 30000000 }
+                )
+            }
+            return @(
+                [pscustomobject]@{ IDProcess = 101; PercentProcessorTime = 10; WorkingSet = 20; PrivateBytes = 30; ThreadCount = 4; HandleCount = 5; VirtualBytes = 40; ElapsedTime = 50 },
+                [pscustomobject]@{ IDProcess = 202; PercentProcessorTime = 11; WorkingSet = 21; PrivateBytes = 31; ThreadCount = 6; HandleCount = 7; VirtualBytes = 41; ElapsedTime = 51 }
+            )
+        }
+
+        $samples = @(Get-ProcessSamples -ProcessId @(101, 202))
+
+        $samples.Count | Should -Be 2
+        $samples.PID | Should -Be @(101, 202)
+        Should -Invoke Get-CimInstance -Times 2 -Exactly -ParameterFilter {
+            $Filter -eq 'IDProcess = 101 OR IDProcess = 202'
+        }
+        $samples[0].CpuTotalSeconds | Should -Be 3
+    }
+
+    It 'does not query CIM when no worker PID is active' {
+        Mock Get-CimInstance { throw 'should not be called' }
+        @(Get-ProcessSamples -ProcessId @()).Count | Should -Be 0
+        Should -Invoke Get-CimInstance -Times 0 -Exactly
     }
 }

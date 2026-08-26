@@ -440,10 +440,10 @@ Suggested structure:
 
 ```json
 {
-  "schemaVersion": 1,
-  "toolVersion": "0.1.0",
+  "schemaVersion": 2,
+  "toolVersion": "0.2.0",
   "computerName": "BEACON01",
-  "collectionStart": "2026-08-26T08:15:00+02:00",
+  "collectionStart": "2026-08-26T06:15:00Z",
   "collectionEnd": null,
   "sampleIntervalSeconds": 15,
   "iis": {
@@ -473,6 +473,13 @@ BytesSentPerSec
 QueueSize
 RejectedRequests
 ArrivalRate
+MaximumConnections
+CurrentAnonymousUsers
+CurrentNonAnonymousUsers
+ServiceUptimeSeconds
+CacheHitRate
+MaxQueueItemAge
+ActiveRequests
 ```
 
 Actual CSV headers should remain stable once version 1 is released.
@@ -484,10 +491,16 @@ Timestamp
 AppPoolName
 PID
 CPUPercent
+RawCPUPercent
+CpuTotalSeconds
 WorkingSetBytes
 PrivateBytes
+VirtualBytes
 ThreadCount
 HandleCount
+UptimeSeconds
+StartTimeUtc
+WorkerCountForPool
 ```
 
 ### 13.4 `apppool-events.csv`
