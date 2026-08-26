@@ -1,0 +1,6 @@
+#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Date: 2026-08-20 00:00:00
+#Fields: date time cs-method cs-uri-stem sc-status sc-substatus sc-win32-status time-taken cs-bytes sc-bytes s-sitename cs-uri-query
+2026-08-20 00:01:00 GET /ManageSoftDL/agent.osd 200 0 0 55 275 900 W3SVC1 -
+2026-08-20 00:02:30 POST /ManageSoftRL/upload.aspx 200 0 0 133 5210 480 W3SVC1 -

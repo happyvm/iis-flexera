@@ -1,0 +1,4 @@
+#Software: Microsoft Internet Information Services 10.0
+#Fields: date time cs-method cs-uri-stem sc-status time-taken
+2026-08-21 00:00:01 GET /ManageSoftDL/policy.xml 200 45
+2026-08-21 00:00:02 GET /ManageSoftDL/policy.xml 200

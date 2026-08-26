@@ -1,0 +1,7 @@
+#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Date: 2026-08-19 00:00:03
+#Fields: date time s-sitename cs-method cs-uri-stem cs-uri-query sc-status sc-substatus sc-win32-status cs-bytes sc-bytes time-taken
+2026-08-19 00:00:03 W3SVC1 POST /ManageSoftRL/upload.aspx - 200 0 0 4821 512 142
+2026-08-19 00:05:11 W3SVC1 GET /ManageSoftDL/policy.xml - 200 0 0 318 8830 63
+2026-08-19 00:12:47 W3SVC1 GET /ManageSoftDL/package.npl - 404 0 2 300 1120 21
