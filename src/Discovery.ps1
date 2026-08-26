@@ -16,6 +16,15 @@ function Import-WebAdministrationModule {
         powershell.exe. When that happens, load it explicitly through the
         Windows PowerShell compatibility layer instead of concluding the
         module is missing.
+
+        This project deliberately avoids the module's IIS:\ PSDrive
+        everywhere (Get-Website/Get-WebConfiguration with a
+        "MACHINE/WEBROOT/APPHOST/..." configuration path instead of
+        Get-Item "IIS:\..."), because loading through the PowerShell 7
+        compatibility layer only proxies cmdlets, not the module's custom
+        PSProvider - so IIS:\ paths do not work there even once the
+        module itself loads successfully, and there is no known
+        workaround for that short of not using IIS:\ at all.
     #>
     [CmdletBinding()]
     param()
@@ -62,7 +71,7 @@ function Get-IisFlexeraEndpoints {
 
     Import-WebAdministrationModule
 
-    $sites = Get-ChildItem -Path 'IIS:\Sites'
+    $sites = @(Get-Website)
     $matchedEndpoints = New-Object System.Collections.Generic.List[object]
 
     foreach ($site in $sites) {
@@ -143,7 +152,8 @@ function Get-IisSiteInfo {
     )
 
     Import-WebAdministrationModule
-    $site = Get-Item "IIS:\Sites\$Name" -ErrorAction Stop
+    $site = Get-Website -Name $Name | Select-Object -First 1
+    if (-not $site) { throw "Site '$Name' not found." }
 
     $bindings = @($site.bindings.Collection | ForEach-Object {
         [pscustomobject]@{
@@ -217,17 +227,34 @@ function Get-SslCertificateInfo {
 }
 
 function Get-IisAppPoolInfo {
+    <#
+        Reads AppPool configuration via Get-WebConfiguration against the
+        "MACHINE/WEBROOT/APPHOST" configuration path rather than the
+        IIS:\AppPools\<name> drive path - the config-path string form
+        does not depend on the WebAdministration PSProvider, so it works
+        under PowerShell 7's compatibility layer where IIS:\ does not
+        (see Import-WebAdministrationModule). Runtime state (Started/
+        Stopped) is not part of applicationHost.config, so it is read
+        separately via Get-WebAppPoolState.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Name
     )
 
     Import-WebAdministrationModule
-    $pool = Get-Item "IIS:\AppPools\$Name" -ErrorAction Stop
+
+    $escapedName = $Name.Replace("'", "''")
+    $pool = Get-WebConfiguration -Filter "system.applicationHost/applicationPools/add[@name='$escapedName']" -PSPath 'MACHINE/WEBROOT/APPHOST' -ErrorAction Stop
+    if (-not $pool) { throw "Application Pool '$Name' not found." }
+
+    $state = $null
+    try { $state = (Get-WebAppPoolState -Name $Name -ErrorAction Stop).Value }
+    catch { $state = $null }
 
     [pscustomobject]@{
         Name            = $Name
-        State           = $pool.state
+        State           = $state
         QueueLength     = $pool.queueLength
         MaxProcesses    = $pool.processModel.maxProcesses
         IdentityType    = $pool.processModel.identityType

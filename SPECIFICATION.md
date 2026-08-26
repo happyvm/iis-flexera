@@ -61,6 +61,8 @@ PowerShell 7 compatibility is desirable but must not require PowerShell 7.
 
 The implementation should avoid third-party PowerShell modules for the first version.
 
+**Confirmed technical blocker, addressed in v0.1:** PowerShell 7's Windows PowerShell compatibility layer (`Import-Module WebAdministration -UseWindowsPowerShell`) proxies the `WebAdministration` module's cmdlets but not its custom PSProvider, so the `IIS:\` drive is unavailable under PowerShell 7 even after the module loads - confirmed against a real Beacon. `src/Discovery.ps1`/`src/ConfigurationBaseline.ps1` were rewritten to avoid `IIS:\` entirely (`Get-Website`/`Get-WebAppPoolState`/`Get-WebConfiguration` with `MACHINE/WEBROOT/APPHOST/...` configuration paths instead of `IIS:\Sites\...`), which removes the blocker in principle but has not yet been re-verified against a real Beacon under PowerShell 7 - see the README.md platform note. Windows PowerShell 5.1 remains the primary target and is unaffected either way.
+
 ---
 
 ## 5. Flexera/IIS discovery
@@ -733,6 +735,7 @@ These items should be resolved during implementation rather than guessed silentl
 - Best PID-safe mechanism for process performance counters on the oldest supported Windows Server version.
 - Whether the report should include SVG/PNG charts in v0.1 or remain Markdown/tabular.
 - Whether a future mode should temporarily add missing IIS W3C log fields with explicit administrator approval.
+- `src/Discovery.ps1`/`src/ConfigurationBaseline.ps1` were rewritten to avoid the `IIS:\` drive entirely (section 4), for PowerShell 7 support. AppPool runtime state (`Get-WebAppPoolState`) is read separately from AppPool configuration (`Get-WebConfiguration`), since applicationHost.config does not carry runtime state the way `Get-Item IIS:\AppPools\<name>` used to expose it as one merged object; this split has not been verified against a real IIS host and is the first thing to check if AppPool info comes back wrong.
 
 Document the chosen answers in the repository when implementation begins.
 

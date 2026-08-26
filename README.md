@@ -270,6 +270,12 @@ Current state (v0.1, in progress):
 - `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and an orchestration wiring them to discovered topology and the configuration baseline: HTTPS/port, TLS certificate validity/name-match, mutual TLS, Basic/Anonymous authentication, WebDAV, Request Filtering extensions, AppPool identity and HTTP logging.
 - `src/Reporting.ps1` — Markdown report generation, including a dedicated configuration-baseline section and requests-by-hour/day traffic breakdown.
 
+### Platform note: PowerShell 7 support
+
+Confirmed against a real Flexera Beacon: PowerShell 7 (`pwsh.exe`) initially failed two ways in a row - `Get-Module -ListAvailable` couldn't see the Windows-PowerShell-only `WebAdministration` module at all, and then, once loaded via `Import-Module WebAdministration -UseWindowsPowerShell` (PS7's compatibility fallback, which `Import-WebAdministrationModule` in `src/Discovery.ps1` now tries automatically), its custom PSProvider - the thing that exposes the `IIS:\` drive - did not cross that compatibility layer, so `IIS:\` paths failed with "Cannot find drive" even though the module's cmdlets worked.
+
+As of this change, `src/Discovery.ps1` and `src/ConfigurationBaseline.ps1` no longer touch the `IIS:\` drive at all: site/AppPool reads use `Get-Website`/`Get-WebAppPoolState`/`Get-WebConfiguration`, and every `-PSPath` argument uses the `MACHINE/WEBROOT/APPHOST/...` configuration-path string form instead of `IIS:\Sites\...` - both are documented, equivalent ways to address IIS configuration, but only the string form is independent of the PSProvider. This removes the confirmed PS7 blocker in principle. **It has not yet been re-tested against a real Beacon** - report back whether `Get-Website`'s returned object shape (particularly `.bindings.Collection`) matches what the code expects, since that could only be verified by running it, not from this environment. If it still fails under PowerShell 7, Windows PowerShell 5.1 (`powershell.exe`) remains this project's primary supported target (SPECIFICATION.md section 4) and is unaffected by any of this.
+
 Known v0.1 gaps, tracked as future work rather than silently faked:
 
 - `FB-IIS-SEC-004`/`FB-IIS-SEC-005` (Flexera's `CheckServerCertificate`/`CheckCertificateRevocation` registry preferences) are not implemented: SECURITY-AUDIT.md cites a Flexera registry key for them without giving its exact path, and guessing one risks reporting fabricated evidence.
