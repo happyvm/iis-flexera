@@ -2,6 +2,42 @@ BeforeAll {
     . "$PSScriptRoot/../src/Statistics.ps1"
 }
 
+Describe 'Select-ByDate' {
+    It 'keeps only records whose [datetime] timestamp falls on the given day' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T23:59:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-20T00:00:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-20T12:00:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-21T00:00:00') }
+        )
+        $result = @(Select-ByDate -Records $records -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20'))
+        $result.Count | Should -Be 2
+    }
+
+    It 'parses a string timestamp column the way Import-Csv would provide it' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = '2026-08-20T08:15:00.0000000+00:00' },
+            [pscustomobject]@{ Timestamp = '2026-08-21T08:15:00.0000000+00:00' }
+        )
+        $result = @(Select-ByDate -Records $records -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20'))
+        $result.Count | Should -Be 1
+    }
+
+    It 'drops records with a missing timestamp rather than guessing' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = $null },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-20T08:00:00') }
+        )
+        $result = @(Select-ByDate -Records $records -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20'))
+        $result.Count | Should -Be 1
+    }
+
+    It 'returns an empty result without throwing for an empty input' {
+        { Select-ByDate -Records @() -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20') } | Should -Not -Throw
+        @(Select-ByDate -Records @() -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20')).Count | Should -Be 0
+    }
+}
+
 Describe 'Get-Percentile' {
     It 'returns $null for empty input' {
         Get-Percentile -Values @() -Percentile 95 | Should -BeNullOrEmpty

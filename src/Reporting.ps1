@@ -63,6 +63,9 @@ function New-CollectionReport {
 
     [void]$sb.AppendLine('## 2. Observation period and collection quality')
     [void]$sb.AppendLine()
+    if ($Summary.DateFilter) {
+        [void]$sb.AppendLine("Filtered to a single day: $($Summary.DateFilter) (local time)")
+    }
     if ($Summary.Metadata) {
         [void]$sb.AppendLine("Start: $($Summary.Metadata.collectionStart)")
         [void]$sb.AppendLine("End: $($Summary.Metadata.collectionEnd)")

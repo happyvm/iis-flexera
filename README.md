@@ -263,7 +263,7 @@ Implementation has started, following [`SPECIFICATION.md`](SPECIFICATION.md), [`
 Current state (v0.1, in progress):
 
 - `Monitor-FlexeraBeaconIIS.ps1` — preflight (discovery, configuration baseline, security audit) plus the timed CSV/JSON collection loop.
-- `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`.
+- `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`. Pass `-Date 2026-08-25` to restrict the report to a single calendar day (local time) - out of a multi-day `Monitor-FlexeraBeaconIIS.ps1` run, or by pointing `-LogPath` directly at one day's IIS log file(s) without ever having run the collector.
 - `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
 - `src/IisLogs.ps1`, `src/Statistics.ps1` — header-driven W3C log parsing and percentile/status statistics. Platform-independent; covered by Pester tests in `tests/`.
 - `src/ConfigurationBaseline.ps1` — read-only Flexera configuration-baseline snapshot (`configuration-baseline.json`), including per-endpoint effective authentication, per-site W3C logging/field-completeness, and the `ManageSoftRL`/`ManageSoftDL` authentication-consistency check (`FB-IIS-BASE-001`, FLEXERA-IIS-BASELINE.md section 3.1).
