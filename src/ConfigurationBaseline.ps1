@@ -160,12 +160,14 @@ function Get-AuthenticationConsistencyFinding {
     param(
         [Parameter(Mandatory)][ValidateSet('Standalone', 'Distinct', 'Unknown')][string]$TopologyType,
         [object]$RLAuth,
-        [object]$DLAuth
+        [object]$DLAuth,
+        [string]$Scope
     )
 
     $base = [ordered]@{
         ControlId               = 'FB-IIS-BASE-001'
         Category                = 'Authentication'
+        Scope                   = $Scope
         ObservedValue           = "Topology: $TopologyType"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = 'A standalone Beacon shares one directory/web.config for ManageSoftRL and ManageSoftDL, so both must use consistent authentication; Flexera documents HTTP 409 upload failures otherwise. A co-installed Beacon may intentionally use different authentication per location.'
@@ -386,7 +388,7 @@ function New-FlexeraConfigurationBaseline {
 
         if ($rl -and $dl) {
             $topologyType = Get-BeaconTopologyType -RLPhysicalPath $rl.PhysicalPath -DLPhysicalPath $dl.PhysicalPath
-            Get-AuthenticationConsistencyFinding -TopologyType $topologyType -RLAuth $rl.Authentication -DLAuth $dl.Authentication
+            Get-AuthenticationConsistencyFinding -TopologyType $topologyType -RLAuth $rl.Authentication -DLAuth $dl.Authentication -Scope $siteName
         }
     }
     $authConsistencyFindings = @($authConsistencyFindings)

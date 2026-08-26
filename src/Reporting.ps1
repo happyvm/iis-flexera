@@ -16,6 +16,22 @@ function Format-StatLine {
     "P50: $($Stats.P50)$Unit, P90: $($Stats.P90)$Unit, P95: $($Stats.P95)$Unit, P99: $($Stats.P99)$Unit, Max: $($Stats.Max)$Unit (n=$($Stats.Count))"
 }
 
+function Format-OptionalValue {
+    <#
+        Renders "Unknown" for $null instead of an empty string, so a
+        missing data point (e.g. no counters collected for this run)
+        reads as explicitly unavailable rather than as a blank that
+        looks like a rendering bug.
+    #>
+    [CmdletBinding()]
+    param(
+        [object]$Value
+    )
+
+    if ($null -eq $Value) { return 'Unknown' }
+    return "$Value"
+}
+
 function ConvertFrom-PSCustomObjectMap {
     <#
         Yields Key/Value pairs from either a hashtable or a PSCustomObject
@@ -58,7 +74,7 @@ function New-CollectionReport {
     [void]$sb.AppendLine()
     [void]$sb.AppendLine("Total requests observed: $($Summary.RequestCount)")
     [void]$sb.AppendLine("Application-pool recycle events: $($Summary.AppPoolRecycleCount)")
-    [void]$sb.AppendLine("Rejected requests (HTTP.sys): $($Summary.RejectedRequestsTotal)")
+    [void]$sb.AppendLine("Rejected requests (HTTP.sys): $(Format-OptionalValue -Value $Summary.RejectedRequestsTotal)")
     [void]$sb.AppendLine()
 
     [void]$sb.AppendLine('## 2. Observation period and collection quality')
@@ -137,7 +153,7 @@ function New-CollectionReport {
     [void]$sb.AppendLine('## 8. HTTP.sys queue behavior')
     [void]$sb.AppendLine()
     [void]$sb.AppendLine("Queue size: $(Format-StatLine -Stats $Summary.QueueStats)")
-    [void]$sb.AppendLine("Rejected requests total: $($Summary.RejectedRequestsTotal)")
+    [void]$sb.AppendLine("Rejected requests total: $(Format-OptionalValue -Value $Summary.RejectedRequestsTotal)")
     [void]$sb.AppendLine()
 
     [void]$sb.AppendLine('## 9. Application-pool lifecycle events')
@@ -187,10 +203,10 @@ function New-CollectionReport {
             [void]$sb.AppendLine("- $($g.Name): $($g.Count)")
         }
         [void]$sb.AppendLine()
-        [void]$sb.AppendLine('| Control | Status | Priority | Effective recommendation |')
-        [void]$sb.AppendLine('|---|---|---|---|')
+        [void]$sb.AppendLine('| Control | Scope | Status | Priority | Effective recommendation |')
+        [void]$sb.AppendLine('|---|---|---|---|---|')
         foreach ($c in $Summary.SecurityControls) {
-            [void]$sb.AppendLine("| $($c.ControlId) | $($c.Status) | $($c.Priority) | $($c.EffectiveRecommendation) |")
+            [void]$sb.AppendLine("| $($c.ControlId) | $($c.Scope) | $($c.Status) | $($c.Priority) | $($c.EffectiveRecommendation) |")
         }
         [void]$sb.AppendLine()
         [void]$sb.AppendLine('This is a v0.1 partial control set. See SECURITY-AUDIT.md for the full control catalogue and status model; not every documented control is implemented yet.')
