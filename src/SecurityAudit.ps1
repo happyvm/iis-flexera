@@ -23,7 +23,8 @@ function Get-HttpsUsageControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][bool]$HttpsBindingPresent,
-        [Parameter(Mandatory)][bool]$HttpBindingPresent
+        [Parameter(Mandatory)][bool]$HttpBindingPresent,
+        [string]$Scope
     )
 
     $status = if ($HttpsBindingPresent) { 'PASS' } elseif ($HttpBindingPresent) { 'WARNING' } else { 'UNKNOWN' }
@@ -31,6 +32,7 @@ function Get-HttpsUsageControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-001'
         Category                = 'Transport'
+        Scope                   = $Scope
         ObservedValue           = "HTTPS present: $HttpsBindingPresent; HTTP present: $HttpBindingPresent"
         MicrosoftGuidance       = 'Prefer encrypted transport for authentication/data in transit.'
         FlexeraGuidance         = 'HTTPS is the preferred first security improvement for Inventory Beacons.'
@@ -44,7 +46,8 @@ function Get-StandardPortControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][int]$Port,
-        [Parameter(Mandatory)][ValidateSet('http', 'https')][string]$Protocol
+        [Parameter(Mandatory)][ValidateSet('http', 'https')][string]$Protocol,
+        [string]$Scope
     )
 
     $expected = if ($Protocol -eq 'http') { 80 } else { 443 }
@@ -53,6 +56,7 @@ function Get-StandardPortControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-002'
         Category                = 'Transport'
+        Scope                   = $Scope
         ObservedValue           = "$Protocol on port $Port"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = "Documented IIS web server mode expects $Protocol on port $expected."
@@ -66,7 +70,8 @@ function Get-BasicAuthenticationControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][bool]$BasicAuthEnabled,
-        [Parameter(Mandatory)][bool]$HttpsEnforced
+        [Parameter(Mandatory)][bool]$HttpsEnforced,
+        [string]$Scope
     )
 
     $status = if (-not $BasicAuthEnabled) {
@@ -80,6 +85,7 @@ function Get-BasicAuthenticationControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-006'
         Category                = 'Authentication'
+        Scope                   = $Scope
         ObservedValue           = "BasicAuth: $BasicAuthEnabled; HTTPS enforced: $HttpsEnforced"
         MicrosoftGuidance       = 'Basic Authentication transmits credentials in clear text unless protected by TLS.'
         FlexeraGuidance         = 'Basic Authentication is supported but Flexera prefers anonymous access and recommends HTTPS as the first security improvement.'
@@ -100,7 +106,8 @@ function Get-AnonymousAuthenticationControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][bool]$AnonymousEnabled,
-        [Parameter(Mandatory)][bool]$HttpsEnforced
+        [Parameter(Mandatory)][bool]$HttpsEnforced,
+        [string]$Scope
     )
 
     $status = if ($AnonymousEnabled -and $HttpsEnforced) {
@@ -114,6 +121,7 @@ function Get-AnonymousAuthenticationControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-007'
         Category                = 'Authentication'
+        Scope                   = $Scope
         ObservedValue           = "Anonymous: $AnonymousEnabled; HTTPS enforced: $HttpsEnforced"
         MicrosoftGuidance       = 'Generic guidance recommends authenticating clients before allowing uploads.'
         FlexeraGuidance         = 'Flexera explicitly recommends anonymous authentication where possible for Inventory Agent/failover behavior.'
@@ -121,6 +129,31 @@ function Get-AnonymousAuthenticationControl {
         Status                  = $status
         Priority                = 'Medium'
     }
+}
+
+function Get-CertificateCommonName {
+    <#
+        Extracts the CN value from an X.509 Subject distinguished-name
+        string. .NET wraps a DN value in double quotes when it contains a
+        comma or leading/trailing whitespace (observed in production: a
+        certificate whose actual CN has a trailing space renders as
+        Subject = 'CN="example.com ", O=...'); without stripping that
+        quoting, the literal quote characters and the space they protect
+        leak into downstream hostname comparisons.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Subject
+    )
+
+    if ($Subject -notmatch 'CN=([^,]+)') { return $null }
+
+    $cn = $Matches[1].Trim()
+    if ($cn.Length -ge 2 -and $cn.StartsWith('"') -and $cn.EndsWith('"')) {
+        $cn = $cn.Substring(1, $cn.Length - 2)
+    }
+
+    return $cn.Trim()
 }
 
 function Get-ClientCertificateMode {
@@ -150,7 +183,8 @@ function Get-CertificateValidityControl {
         [Parameter(Mandatory)][datetime]$NotBefore,
         [Parameter(Mandatory)][datetime]$NotAfter,
         [datetime]$Now = (Get-Date),
-        [int]$WarningWindowDays = 30
+        [int]$WarningWindowDays = 30,
+        [string]$Scope
     )
 
     $status = if ($Now -lt $NotBefore) {
@@ -166,6 +200,7 @@ function Get-CertificateValidityControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-003'
         Category                = 'Transport'
+        Scope                   = $Scope
         ObservedValue           = "NotBefore: $($NotBefore.ToString('o')); NotAfter: $($NotAfter.ToString('o'))"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = 'Flexera expects the client to validate the Beacon server certificate; the certificate must be valid and trusted.'
@@ -184,7 +219,8 @@ function Get-CertificateNameMatchControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ExpectedHostName,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CertificateNames
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CertificateNames,
+        [string]$Scope
     )
 
     $status = 'UNKNOWN'
@@ -204,6 +240,7 @@ function Get-CertificateNameMatchControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-003'
         Category                = 'Transport'
+        Scope                   = $Scope
         ObservedValue           = "Expected host: $ExpectedHostName; certificate names: $($CertificateNames -join ', ')"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = "The certificate's DNS identity must match the server being contacted; local trust does not prove every Inventory Agent trusts the issuing CA."
@@ -222,7 +259,8 @@ function Get-MutualTlsControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][bool]$HttpsPresent,
-        [Parameter(Mandatory)][ValidateSet('Ignore', 'Accept', 'Require')][string]$ClientCertificateMode
+        [Parameter(Mandatory)][ValidateSet('Ignore', 'Accept', 'Require')][string]$ClientCertificateMode,
+        [string]$Scope
     )
 
     $status = if ($ClientCertificateMode -eq 'Ignore') {
@@ -236,6 +274,7 @@ function Get-MutualTlsControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-008'
         Category                = 'Authentication'
+        Scope                   = $Scope
         ObservedValue           = "ClientCertificateMode: $ClientCertificateMode; HTTPS present: $HttpsPresent"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = 'Flexera supports mutual TLS as an optional enhanced-security profile; the Beacon validates client-certificate format/validity but does not check client-certificate revocation.'
@@ -248,7 +287,8 @@ function Get-MutualTlsControl {
 function Get-WebDavControl {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$WebDavState
+        [Parameter(Mandatory)][string]$WebDavState,
+        [string]$Scope
     )
 
     $status = switch ($WebDavState) {
@@ -261,6 +301,7 @@ function Get-WebDavControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-009'
         Category                = 'Attack Surface'
+        Scope                   = $Scope
         ObservedValue           = $WebDavState
         MicrosoftGuidance       = 'WebDAV may be useful for publishing scenarios but is unrelated to this workload.'
         FlexeraGuidance         = 'WebDAV must be disabled for IIS-based Inventory Beacons; it can intercept HTTP processing and block inventory functionality.'
@@ -274,7 +315,8 @@ function Get-RequestFilteringExtensionControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$ExtensionStates,
-        [Parameter(Mandatory)][bool]$RequestFilteringEnabled
+        [Parameter(Mandatory)][bool]$RequestFilteringEnabled,
+        [string]$Scope
     )
 
     $blocked = @($ExtensionStates.GetEnumerator() | Where-Object { $_.Value -eq 'Blocked' } | ForEach-Object { $_.Key })
@@ -290,6 +332,7 @@ function Get-RequestFilteringExtensionControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-010'
         Category                = 'Attack Surface'
+        Scope                   = $Scope
         ObservedValue           = (($ExtensionStates.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; ')
         MicrosoftGuidance       = 'Request Filtering rejects unwanted or potentially harmful requests.'
         FlexeraGuidance         = 'Filtering must not block extensions used by the Inventory Agent, including .osd, .npl, .nds and .ini.'
@@ -302,7 +345,8 @@ function Get-RequestFilteringExtensionControl {
 function Get-DirectoryBrowsingControl {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][bool]$Enabled
+        [Parameter(Mandatory)][bool]$Enabled,
+        [string]$Scope
     )
 
     $status = if ($Enabled) { 'WARNING' } else { 'PASS' }
@@ -310,6 +354,7 @@ function Get-DirectoryBrowsingControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-012'
         Category                = 'Attack Surface'
+        Scope                   = $Scope
         ObservedValue           = "Directory browsing enabled: $Enabled"
         MicrosoftGuidance       = 'Directory browsing is disabled by default and should stay disabled unless required.'
         FlexeraGuidance         = 'The Directory Browsing role service may be installed as part of the supported feature set without implying the site-level feature must be enabled.'
@@ -322,7 +367,8 @@ function Get-DirectoryBrowsingControl {
 function Get-AppPoolIdentityControl {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$IdentityType
+        [Parameter(Mandatory)][string]$IdentityType,
+        [string]$Scope
     )
 
     $status = switch ($IdentityType) {
@@ -337,6 +383,7 @@ function Get-AppPoolIdentityControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-013'
         Category                = 'Isolation'
+        Scope                   = $Scope
         ObservedValue           = $IdentityType
         MicrosoftGuidance       = 'Use a unique, low-privilege Application Pool identity such as ApplicationPoolIdentity.'
         FlexeraGuidance         = $null
@@ -350,7 +397,8 @@ function Get-HttpLoggingControl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][bool]$LoggingEnabled,
-        [Parameter(Mandatory)][bool]$TimeTakenFieldPresent
+        [Parameter(Mandatory)][bool]$TimeTakenFieldPresent,
+        [string]$Scope
     )
 
     $status = if (-not $LoggingEnabled) {
@@ -364,6 +412,7 @@ function Get-HttpLoggingControl {
     [pscustomobject]@{
         ControlId               = 'FB-IIS-SEC-015'
         Category                = 'Auditability'
+        Scope                   = $Scope
         ObservedValue           = "Enabled: $LoggingEnabled; time-taken present: $TimeTakenFieldPresent"
         MicrosoftGuidance       = $null
         FlexeraGuidance         = 'HTTP Logging is part of the documented IIS prerequisites for Inventory Beacons.'
@@ -397,7 +446,7 @@ function Export-SecurityAuditCsv {
     )
 
     $Controls |
-        Select-Object ControlId, Category, ObservedValue, MicrosoftGuidance, FlexeraGuidance, EffectiveRecommendation, Status, Priority |
+        Select-Object ControlId, Category, Scope, ObservedValue, MicrosoftGuidance, FlexeraGuidance, EffectiveRecommendation, Status, Priority |
         Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
 }
 
@@ -422,14 +471,15 @@ function Invoke-FlexeraSecurityAudit {
         $httpBindings  = @($site.Bindings | Where-Object { $_.Protocol -eq 'http' })
         $siteHasHttps[$site.Name] = ($httpsBindings.Count -gt 0)
 
-        $controls.Add((Get-HttpsUsageControl -HttpsBindingPresent ($httpsBindings.Count -gt 0) -HttpBindingPresent ($httpBindings.Count -gt 0))) | Out-Null
+        $controls.Add((Get-HttpsUsageControl -HttpsBindingPresent ($httpsBindings.Count -gt 0) -HttpBindingPresent ($httpBindings.Count -gt 0) -Scope $site.Name)) | Out-Null
 
         foreach ($b in @($site.Bindings)) {
             if ($b.BindingInformation -match '^(?<ip>[^:]*):(?<port>\d+):(?<host>.*)$') {
                 $port = [int]$Matches['port']
                 $bindingHost = $Matches['host']
+                $bindingScope = "$($site.Name) ($($b.Protocol)/$port)"
 
-                $controls.Add((Get-StandardPortControl -Port $port -Protocol $b.Protocol)) | Out-Null
+                $controls.Add((Get-StandardPortControl -Port $port -Protocol $b.Protocol -Scope $bindingScope)) | Out-Null
 
                 if ($b.Protocol -eq 'https' -and $b.CertificateHash) {
                     $certInfo = $null
@@ -437,41 +487,44 @@ function Invoke-FlexeraSecurityAudit {
                     catch { $certInfo = $null }
 
                     if ($certInfo) {
-                        $controls.Add((Get-CertificateValidityControl -NotBefore $certInfo.NotBefore -NotAfter $certInfo.NotAfter)) | Out-Null
+                        $controls.Add((Get-CertificateValidityControl -NotBefore $certInfo.NotBefore -NotAfter $certInfo.NotAfter -Scope $bindingScope)) | Out-Null
 
                         if ($bindingHost) {
                             $certNames = @($certInfo.SubjectAltNames)
-                            if ($certInfo.Subject -match 'CN=([^,]+)') { $certNames += $Matches[1].Trim() }
-                            $controls.Add((Get-CertificateNameMatchControl -ExpectedHostName $bindingHost -CertificateNames @($certNames | Select-Object -Unique))) | Out-Null
+                            $cn = Get-CertificateCommonName -Subject $certInfo.Subject
+                            if ($cn) { $certNames += $cn }
+                            $controls.Add((Get-CertificateNameMatchControl -ExpectedHostName $bindingHost -CertificateNames @($certNames | Select-Object -Unique) -Scope $bindingScope)) | Out-Null
                         }
                     }
 
                     $clientCertMode = Get-ClientCertificateMode -SslFlags ([int]$b.SslFlags)
-                    $controls.Add((Get-MutualTlsControl -HttpsPresent $true -ClientCertificateMode $clientCertMode)) | Out-Null
+                    $controls.Add((Get-MutualTlsControl -HttpsPresent $true -ClientCertificateMode $clientCertMode -Scope $bindingScope)) | Out-Null
                 }
             }
         }
     }
 
     foreach ($pool in @($Topology.SelectedAppPools)) {
-        $controls.Add((Get-AppPoolIdentityControl -IdentityType $pool.IdentityType)) | Out-Null
+        $controls.Add((Get-AppPoolIdentityControl -IdentityType $pool.IdentityType -Scope $pool.Name)) | Out-Null
     }
 
     foreach ($endpoint in @($Baseline.Endpoints)) {
-        $controls.Add((Get-WebDavControl -WebDavState $endpoint.WebDav)) | Out-Null
+        $endpointScope = "$($endpoint.Site)$($endpoint.Path)"
+
+        $controls.Add((Get-WebDavControl -WebDavState $endpoint.WebDav -Scope $endpointScope)) | Out-Null
 
         if ($endpoint.RequestFiltering -and $endpoint.RequestFiltering.Count -gt 0) {
-            $controls.Add((Get-RequestFilteringExtensionControl -ExtensionStates $endpoint.RequestFiltering -RequestFilteringEnabled $true)) | Out-Null
+            $controls.Add((Get-RequestFilteringExtensionControl -ExtensionStates $endpoint.RequestFiltering -RequestFilteringEnabled $true -Scope $endpointScope)) | Out-Null
         }
 
         $httpsEnforced = [bool]$siteHasHttps[$endpoint.Site]
 
         if ($endpoint.Authentication) {
             if ($null -ne $endpoint.Authentication.BasicEnabled) {
-                $controls.Add((Get-BasicAuthenticationControl -BasicAuthEnabled ([bool]$endpoint.Authentication.BasicEnabled) -HttpsEnforced $httpsEnforced)) | Out-Null
+                $controls.Add((Get-BasicAuthenticationControl -BasicAuthEnabled ([bool]$endpoint.Authentication.BasicEnabled) -HttpsEnforced $httpsEnforced -Scope $endpointScope)) | Out-Null
             }
             if ($null -ne $endpoint.Authentication.AnonymousEnabled) {
-                $controls.Add((Get-AnonymousAuthenticationControl -AnonymousEnabled ([bool]$endpoint.Authentication.AnonymousEnabled) -HttpsEnforced $httpsEnforced)) | Out-Null
+                $controls.Add((Get-AnonymousAuthenticationControl -AnonymousEnabled ([bool]$endpoint.Authentication.AnonymousEnabled) -HttpsEnforced $httpsEnforced -Scope $endpointScope)) | Out-Null
             }
         }
     }
@@ -479,11 +532,12 @@ function Invoke-FlexeraSecurityAudit {
     foreach ($siteLogging in @($Baseline.Logging)) {
         if ($siteLogging.Enabled -is [bool]) {
             $timeTakenPresent = @($siteLogging.EnabledFields) -contains 'time-taken'
-            $controls.Add((Get-HttpLoggingControl -LoggingEnabled $siteLogging.Enabled -TimeTakenFieldPresent $timeTakenPresent)) | Out-Null
+            $controls.Add((Get-HttpLoggingControl -LoggingEnabled $siteLogging.Enabled -TimeTakenFieldPresent $timeTakenPresent -Scope $siteLogging.SiteName)) | Out-Null
         } else {
             $controls.Add([pscustomobject]@{
                 ControlId               = 'FB-IIS-SEC-015'
                 Category                = 'Auditability'
+                Scope                   = $siteLogging.SiteName
                 ObservedValue           = "Enabled: $($siteLogging.Enabled)"
                 MicrosoftGuidance       = $null
                 FlexeraGuidance         = 'HTTP Logging is part of the documented IIS prerequisites for Inventory Beacons.'

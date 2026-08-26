@@ -92,6 +92,20 @@ Describe 'Get-AppPoolIdentityControl' {
     }
 }
 
+Describe 'Get-CertificateCommonName' {
+    It 'extracts a plain CN' {
+        Get-CertificateCommonName -Subject 'CN=beacon.example.com, O=Example Corp' | Should -Be 'beacon.example.com'
+    }
+
+    It 'strips .NET''s quoting around a CN with a trailing space, observed on a real certificate' {
+        Get-CertificateCommonName -Subject 'CN="emsw3030.fr1.grs.net ", OU=IT' | Should -Be 'emsw3030.fr1.grs.net'
+    }
+
+    It 'returns $null when the Subject has no CN' {
+        Get-CertificateCommonName -Subject 'O=Example Corp' | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-ClientCertificateMode' {
     It 'decodes SslRequireCert as Require' {
         Get-ClientCertificateMode -SslFlags 4 | Should -Be 'Require'
@@ -186,6 +200,15 @@ Describe 'Invoke-FlexeraSecurityAudit' {
                 [pscustomobject]@{
                     Name             = 'ManageSoftRL'
                     Site             = 'Default Web Site'
+                    Path             = '/ManageSoftRL'
+                    WebDav           = 'Disabled'
+                    RequestFiltering = @{ '.osd' = 'Allowed'; '.npl' = 'Allowed'; '.nds' = 'Allowed'; '.ini' = 'Allowed' }
+                    Authentication   = [pscustomobject]@{ AnonymousEnabled = $true; BasicEnabled = $false; WindowsEnabled = $false }
+                },
+                [pscustomobject]@{
+                    Name             = 'ManageSoftDL'
+                    Site             = 'Default Web Site'
+                    Path             = '/ManageSoftDL'
                     WebDav           = 'Disabled'
                     RequestFiltering = @{ '.osd' = 'Allowed'; '.npl' = 'Allowed'; '.nds' = 'Allowed'; '.ini' = 'Allowed' }
                     Authentication   = [pscustomobject]@{ AnonymousEnabled = $true; BasicEnabled = $false; WindowsEnabled = $false }
@@ -203,10 +226,21 @@ Describe 'Invoke-FlexeraSecurityAudit' {
 
         $controls.Count | Should -BeGreaterThan 0
         ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-001' }).Status | Should -Be 'PASS'
-        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-007' }).Status | Should -Be 'FLEXERA_EXCEPTION'
+        $anonFindings = @($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-007' })
+        $anonFindings.Count | Should -Be 2
+        $anonFindings | ForEach-Object { $_.Status | Should -Be 'FLEXERA_EXCEPTION' }
         ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-013' }).Status | Should -Be 'PASS'
         ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-015' }).Status | Should -Be 'PASS'
         ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-BASE-001' }).Status | Should -Be 'PASS'
+
+        # RL and DL produce identical WebDAV findings by content (same
+        # shared config in this fixture), but Scope must still tell them
+        # apart rather than looking like an accidental duplicate.
+        $webDavFindings = @($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-009' })
+        $webDavFindings.Count | Should -Be 2
+        @($webDavFindings.Scope | Select-Object -Unique).Count | Should -Be 2
+        $webDavFindings.Scope | Should -Contain 'Default Web Site/ManageSoftRL'
+        $webDavFindings.Scope | Should -Contain 'Default Web Site/ManageSoftDL'
     }
 
     It 'returns an empty array without throwing when nothing was discovered' {

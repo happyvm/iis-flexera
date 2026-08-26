@@ -3,6 +3,17 @@ BeforeAll {
     . "$PSScriptRoot/../src/Reporting.ps1"
 }
 
+Describe 'Format-OptionalValue' {
+    It 'renders "Unknown" for $null instead of a blank string' {
+        Format-OptionalValue -Value $null | Should -Be 'Unknown'
+    }
+
+    It 'renders a real value, including zero, as-is' {
+        Format-OptionalValue -Value 0 | Should -Be '0'
+        Format-OptionalValue -Value 'text' | Should -Be 'text'
+    }
+}
+
 Describe 'New-CollectionReport' {
     It 'produces a markdown file with the required top-level sections' {
         $summary = [pscustomobject]@{

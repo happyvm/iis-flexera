@@ -159,6 +159,8 @@ Notes
 
 `Priority` is a project triage value, not a Microsoft or Flexera severity rating unless the vendor explicitly assigns one.
 
+**Implementation status (iis-flexera v0.1):** `ControlId`, `Category`, `Scope`, `ObservedValue`, `MicrosoftGuidance`, `FlexeraGuidance`, `EffectiveRecommendation`, `Status` and `Priority` are implemented (`src/SecurityAudit.ps1`). `Evidence`, `MicrosoftSource` and `FlexeraSource` (as structured fields separate from the guidance text) and `Notes` are not yet implemented. `Scope` matters in practice: a standalone Beacon's `ManageSoftRL` and `ManageSoftDL` share one directory/web.config, so several controls (WebDAV, Request Filtering, Basic/Anonymous authentication) are evaluated once per endpoint and legitimately produce two findings with identical `ObservedValue`/`Status` but different `Scope` (e.g. `Default Web Site/ManageSoftRL` vs `Default Web Site/ManageSoftDL`) - this is intentional per-endpoint evidence, not a duplicate-emission bug, and `Scope` is what makes that visible instead of the two rows looking like an accidental copy.
+
 Suggested values:
 
 ```text
