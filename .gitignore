@@ -1,0 +1,9 @@
+# Collection run output (created by Monitor-FlexeraBeaconIIS.ps1)
+output/
+
+# Editor/OS noise
+*.swp
+.DS_Store
+
+# PowerShell module analysis cache
+*.psanalysis

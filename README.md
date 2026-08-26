@@ -258,7 +258,29 @@ The final report should include at least:
 
 ## Repository status
 
-The project is currently in the **specification/design phase**. Implementation should follow [`SPECIFICATION.md`](SPECIFICATION.md), [`FLEXERA-IIS-BASELINE.md`](FLEXERA-IIS-BASELINE.md) and [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md).
+Implementation has started, following [`SPECIFICATION.md`](SPECIFICATION.md), [`FLEXERA-IIS-BASELINE.md`](FLEXERA-IIS-BASELINE.md) and [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md).
+
+Current state (v0.1, in progress):
+
+- `Monitor-FlexeraBeaconIIS.ps1` — preflight (discovery, configuration baseline, security audit) plus the timed CSV/JSON collection loop.
+- `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`.
+- `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
+- `src/IisLogs.ps1`, `src/Statistics.ps1` — header-driven W3C log parsing and percentile/status statistics. Platform-independent; covered by Pester tests in `tests/`.
+- `src/ConfigurationBaseline.ps1` — read-only Flexera configuration-baseline snapshot (`configuration-baseline.json`).
+- `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and a partial orchestration wiring them to discovered topology.
+- `src/Reporting.ps1` — Markdown report generation.
+
+Known v0.1 gaps, tracked as future work rather than silently faked:
+
+- The security-audit orchestration in `Invoke-FlexeraSecurityAudit` covers HTTPS/port, WebDAV, Request Filtering extensions and AppPool identity; it does not yet resolve effective Basic/Anonymous authentication, TLS certificate metadata, mutual TLS, HSTS, or module-surface controls from live IIS configuration.
+- `Discovery.ps1`/`PerformanceCounters.ps1`/`ConfigurationBaseline.ps1` require a Windows/IIS host to run and are not yet covered by integration tests (SPECIFICATION.md section 19.2); they have been syntax-checked but not exercised against a real Beacon.
+- Secret/credential redaction for exported AppPool identities is not implemented yet.
+
+Run the unit tests with [Pester](https://pester.dev/) on Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+Invoke-Pester -Path ./tests
+```
 
 ## Reference documentation
 
