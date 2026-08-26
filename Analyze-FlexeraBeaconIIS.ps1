@@ -95,10 +95,15 @@ $requests = @()
 $logWarnings = New-Object System.Collections.Generic.List[string]
 
 if ($LogPath) {
-    # File timestamps are local filesystem metadata while W3C rows are UTC.
-    # Do not pre-filter rotated files by a naive date; the authoritative UTC
-    # window is applied to normalized records below.
+    # File timestamps are local filesystem metadata while W3C rows are UTC, so
+    # -SinceDate here is only a conservative pre-filter over which *files* get
+    # parsed at all (see Get-W3CLogFileSet) - it never drops a file that could
+    # plausibly contain the target day. The authoritative UTC window is still
+    # applied to normalized records below via Select-ByDate. Without this,
+    # -Date would still parse every rotated log file in -LogPath into memory
+    # before discarding all but one day's worth of records.
     $logSetParams = @{ Path = $LogPath }
+    if ($targetDate) { $logSetParams['SinceDate'] = $targetDate }
     $logSet = Read-W3CLogSet @logSetParams
     if (-not $logSet.FieldsConsistent) {
         $logWarnings.Add('IIS log files in this run use inconsistent #Fields: definitions; each file was parsed against its own header, but column sets differ across files.') | Out-Null
