@@ -99,7 +99,8 @@ function New-CollectionReport {
     [void]$sb.AppendLine('## 3. Observation Period')
     [void]$sb.AppendLine()
     if ($Summary.DateFilter) {
-        [void]$sb.AppendLine("Filtered to calendar day $($Summary.DateFilter) in timezone '$($Summary.ReportTimeZone)', using converted UTC boundaries.")
+        $dateFilterLabel = if ($Summary.DateFilterEnd) { "period $($Summary.DateFilter) to $($Summary.DateFilterEnd)" } else { "calendar day $($Summary.DateFilter)" }
+        [void]$sb.AppendLine("Filtered to $dateFilterLabel in timezone '$($Summary.ReportTimeZone)', using converted UTC boundaries.")
     }
     if ($Summary.Metadata) {
         [void]$sb.AppendLine("Start: $(Format-ReportTimestamp -Value $Summary.Metadata.collectionStart -Display $timestampDisplay -LocalTimeZone $displayLocalTimeZone)")

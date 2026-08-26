@@ -60,6 +60,36 @@ function Get-UtcDayRange {
     }
 }
 
+function Get-UtcDateRange {
+    <#
+        Like Get-UtcDayRange, but spans a multi-day period
+        [StartDate 00:00:00, EndDate+1 00:00:00) instead of a single
+        calendar day. Each boundary is computed via Get-UtcDayRange so the
+        same DST handling applies independently to the first and last day
+        of the period; StartDate = EndDate reproduces Get-UtcDayRange's
+        single-day result exactly.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][datetime]$StartDate,
+        [Parameter(Mandatory)][datetime]$EndDate,
+        [Parameter(Mandatory)][TimeZoneInfo]$TimeZone
+    )
+
+    if ($EndDate.Date -lt $StartDate.Date) {
+        throw "-EndDate ($($EndDate.ToString('yyyy-MM-dd'))) is before -StartDate ($($StartDate.ToString('yyyy-MM-dd')))."
+    }
+
+    $startRange = Get-UtcDayRange -Date $StartDate -TimeZone $TimeZone
+    $endRange = Get-UtcDayRange -Date $EndDate -TimeZone $TimeZone
+
+    [pscustomobject]@{
+        StartUtc = $startRange.StartUtc
+        EndUtc   = $endRange.EndUtc
+        TimeZone = $TimeZone.Id
+    }
+}
+
 function Format-ReportTimestamp {
     [CmdletBinding()]
     param(

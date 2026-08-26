@@ -37,6 +37,22 @@ Describe 'Select-ByDate' {
         { Select-ByDate -Records @() -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20') } | Should -Not -Throw
         @(Select-ByDate -Records @() -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20')).Count | Should -Be 0
     }
+
+    It 'keeps records across a multi-day period when -EndDate is given' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T23:59:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-20T00:00:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-23T12:00:00') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-26T23:59:59') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-27T00:00:00') }
+        )
+        $result = @(Select-ByDate -Records $records -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-20') -EndDate (Get-Date '2026-08-26'))
+        $result.Count | Should -Be 3
+    }
+
+    It 'throws when -EndDate is before -Date' {
+        { Select-ByDate -Records @() -TimestampProperty 'Timestamp' -Date (Get-Date '2026-08-26') -EndDate (Get-Date '2026-08-20') } | Should -Throw
+    }
 }
 
 Describe 'Get-Percentile' {

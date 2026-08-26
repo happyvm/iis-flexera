@@ -6,24 +6,27 @@
 
 function Select-ByDate {
     <#
-        Filters records to a single calendar day [Date 00:00:00, Date+1
-        00:00:00), reading the given property as either a [datetime] or
-        a string PowerShell can cast to one (covers both normalized W3C
-        request records and CSV rows Import-Csv loaded as strings).
-        Records with a missing/unparsable timestamp are dropped rather
-        than guessed into the window - they cannot be reliably attributed
-        to a specific day.
+        Filters records to a period [Date 00:00:00, EndDate+1 00:00:00),
+        reading the given property as either a [datetime] or a string
+        PowerShell can cast to one (covers both normalized W3C request
+        records and CSV rows Import-Csv loaded as strings). Omitting
+        -EndDate keeps the original single-calendar-day behavior (EndDate
+        defaults to Date). Records with a missing/unparsable timestamp are
+        dropped rather than guessed into the window - they cannot be
+        reliably attributed to a specific day.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records,
         [Parameter(Mandatory)][string]$TimestampProperty,
         [Parameter(Mandatory)][datetime]$Date,
+        [datetime]$EndDate,
         [TimeZoneInfo]$TimeZone = [TimeZoneInfo]::Local,
         [ValidateSet('Utc', 'Local', 'UnspecifiedAsUtc')][string]$UnspecifiedKind = 'Utc'
     )
 
-    $range = Get-UtcDayRange -Date $Date -TimeZone $TimeZone
+    if (-not $PSBoundParameters.ContainsKey('EndDate')) { $EndDate = $Date }
+    $range = Get-UtcDateRange -StartDate $Date -EndDate $EndDate -TimeZone $TimeZone
 
     $Records | Where-Object {
         $raw = $_.$TimestampProperty

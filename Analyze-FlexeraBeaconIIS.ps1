@@ -10,13 +10,16 @@
     latency analysis is unavailable and the report says so explicitly
     rather than fabricating figures (SPECIFICATION.md section 16).
 
-    Pass -Date to restrict the report to a single calendar day in the
-    selected -DateTimeZoneId (analyzer-local timezone by default), filtering
-    against DST-aware UTC boundaries for requests, counters, worker samples and
-    AppPool events alike. Useful both to re-analyze one day out of a
-    multi-day Monitor-FlexeraBeaconIIS.ps1 run, and to analyze IIS's own
-    daily-rotated W3C logs for a single past day without ever running the
-    collector - point -LogPath at that day's log file(s) directly.
+    Pass -Date to restrict the report to a single calendar day, or -Date
+    together with -EndDate to restrict it to a multi-day period
+    [Date, EndDate] (inclusive), in the selected -DateTimeZoneId
+    (analyzer-local timezone by default), filtering against DST-aware UTC
+    boundaries for requests, counters, worker samples and AppPool events
+    alike. Useful both to re-analyze part of a multi-day
+    Monitor-FlexeraBeaconIIS.ps1 run, and to analyze IIS's own
+    daily-rotated W3C logs for a past day or range without ever running
+    the collector - point -LogPath at the relevant log file(s)/directory
+    directly. -EndDate requires -Date and must be on or after it.
     Records with no resolvable timestamp are dropped rather than guessed
     into the window.
 
@@ -26,12 +29,17 @@
     .EXAMPLE
     .\Analyze-FlexeraBeaconIIS.ps1 -RunPath .\output\2026-08-26_081500 -LogPath 'C:\inetpub\logs\LogFiles\W3SVC1' -Date 2026-08-25
     Restricts the report to 2026-08-25 only, out of a longer run/log set.
+
+    .EXAMPLE
+    .\Analyze-FlexeraBeaconIIS.ps1 -RunPath .\output\2026-08-26_081500 -LogPath 'C:\inetpub\logs\LogFiles\W3SVC1' -Date 2026-08-20 -EndDate 2026-08-26
+    Restricts the report to the 2026-08-20..2026-08-26 period.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$RunPath,
     [string[]]$LogPath,
     [string]$Date,
+    [string]$EndDate,
     [ValidateSet('UTC', 'Local', 'Both')][string]$DisplayTimeZone = 'UTC',
     [string]$DateTimeZoneId
 )
@@ -69,8 +77,14 @@ if ($DateTimeZoneId) {
     catch { throw "Unknown -DateTimeZoneId '$DateTimeZoneId': $($_.Exception.Message)" }
 }
 
+if ($EndDate -and -not $Date) {
+    throw '-EndDate requires -Date (the start of the period).'
+}
+
 $dayWarnings = New-Object System.Collections.Generic.List[string]
 $targetDate = $null
+$targetEndDate = $null
+$periodLabel = $null
 if ($Date) {
     try {
         $targetDate = [datetime]::Parse($Date, [System.Globalization.CultureInfo]::InvariantCulture)
@@ -78,14 +92,32 @@ if ($Date) {
         throw "Could not parse -Date '$Date' as a date: $($_.Exception.Message)"
     }
 
+    $targetEndDate = $targetDate
+    if ($EndDate) {
+        try {
+            $targetEndDate = [datetime]::Parse($EndDate, [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch {
+            throw "Could not parse -EndDate '$EndDate' as a date: $($_.Exception.Message)"
+        }
+        if ($targetEndDate.Date -lt $targetDate.Date) {
+            throw "-EndDate ($($targetEndDate.ToString('yyyy-MM-dd'))) is before -Date ($($targetDate.ToString('yyyy-MM-dd')))."
+        }
+    }
+
+    $periodLabel = if ($targetEndDate.Date -eq $targetDate.Date) {
+        "calendar day $($targetDate.ToString('yyyy-MM-dd'))"
+    } else {
+        "period $($targetDate.ToString('yyyy-MM-dd')) to $($targetEndDate.ToString('yyyy-MM-dd'))"
+    }
+
     $countersBeforeFilter = $counters.Count
     $workersBeforeFilter = $workerSamples.Count
     $eventsBeforeFilter = $appPoolEvents.Count
-    $counters      = @(Select-ByDate -Records $counters -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
-    $workerSamples = @(Select-ByDate -Records $workerSamples -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
-    $appPoolEvents = @(Select-ByDate -Records $appPoolEvents -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
+    $counters      = @(Select-ByDate -Records $counters -TimestampProperty 'Timestamp' -Date $targetDate -EndDate $targetEndDate -TimeZone $reportTimeZone)
+    $workerSamples = @(Select-ByDate -Records $workerSamples -TimestampProperty 'Timestamp' -Date $targetDate -EndDate $targetEndDate -TimeZone $reportTimeZone)
+    $appPoolEvents = @(Select-ByDate -Records $appPoolEvents -TimestampProperty 'Timestamp' -Date $targetDate -EndDate $targetEndDate -TimeZone $reportTimeZone)
 
-    $dayWarnings.Add("Report restricted to $($targetDate.ToString('yyyy-MM-dd')) in timezone '$($reportTimeZone.Id)'; filtering used UTC boundaries.") | Out-Null
+    $dayWarnings.Add("Report restricted to $periodLabel in timezone '$($reportTimeZone.Id)'; filtering used UTC boundaries.") | Out-Null
     if ($counters.Count -eq 0 -and $countersBeforeFilter -gt 0) { $counterInput.Status = 'OUTSIDE_PERIOD' }
     if ($workerSamples.Count -eq 0 -and $workersBeforeFilter -gt 0) { $workerInput.Status = 'OUTSIDE_PERIOD' }
     if ($appPoolEvents.Count -eq 0 -and $eventsBeforeFilter -gt 0) { $appPoolEventInput.Status = 'OUTSIDE_PERIOD' }
@@ -96,14 +128,18 @@ $logWarnings = New-Object System.Collections.Generic.List[string]
 
 if ($LogPath) {
     # File timestamps are local filesystem metadata while W3C rows are UTC, so
-    # -SinceDate here is only a conservative pre-filter over which *files* get
-    # parsed at all (see Get-W3CLogFileSet) - it never drops a file that could
-    # plausibly contain the target day. The authoritative UTC window is still
-    # applied to normalized records below via Select-ByDate. Without this,
-    # -Date would still parse every rotated log file in -LogPath into memory
-    # before discarding all but one day's worth of records.
+    # -SinceDate/-UntilDate here are only a conservative pre-filter over which
+    # *files* get parsed at all (see Get-W3CLogFileSet) - they never drop a
+    # file that could plausibly contain the target day/period. The
+    # authoritative UTC window is still applied to normalized records below
+    # via Select-ByDate. Without this, -Date/-EndDate would still parse every
+    # rotated log file in -LogPath into memory before discarding everything
+    # outside the requested window.
     $logSetParams = @{ Path = $LogPath }
-    if ($targetDate) { $logSetParams['SinceDate'] = $targetDate }
+    if ($targetDate) {
+        $logSetParams['SinceDate'] = $targetDate
+        $logSetParams['UntilDate'] = $targetEndDate
+    }
     $logSet = Read-W3CLogSet @logSetParams
     if (-not $logSet.FieldsConsistent) {
         $logWarnings.Add('IIS log files in this run use inconsistent #Fields: definitions; each file was parsed against its own header, but column sets differ across files.') | Out-Null
@@ -122,10 +158,10 @@ if ($LogPath) {
     $logInputStatus = if ($requests.Count -gt 0) { 'PRESENT' } elseif (@($logSet.UnreadableFiles).Count -gt 0) { 'INVALID' } else { 'EMPTY' }
 
     if ($targetDate) {
-        $requests = @(Select-ByDate -Records $requests -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone -UnspecifiedKind UnspecifiedAsUtc)
+        $requests = @(Select-ByDate -Records $requests -TimestampProperty 'Timestamp' -Date $targetDate -EndDate $targetEndDate -TimeZone $reportTimeZone -UnspecifiedKind UnspecifiedAsUtc)
         if ($requests.Count -eq 0) {
             if ($logSet.Records.Count -gt 0) { $logInputStatus = 'OUTSIDE_PERIOD' }
-            $dayWarnings.Add("No HTTP requests fall on $($targetDate.ToString('yyyy-MM-dd')) in the supplied -LogPath; check the selected timezone and log files.") | Out-Null
+            $dayWarnings.Add("No HTTP requests fall in the $periodLabel window in the supplied -LogPath; check the selected timezone and log files.") | Out-Null
         }
     }
     $logInputError = if ($logInputStatus -eq 'INVALID') { @($logSet.UnreadableFiles | ForEach-Object { $_.Error }) -join '; ' } else { $null }
@@ -170,6 +206,7 @@ if ($metadata -and $metadata.warnings) {
 $summary = [pscustomobject]@{
     Metadata               = $metadata
     DateFilter              = if ($targetDate) { $targetDate.ToString('yyyy-MM-dd') } else { $null }
+    DateFilterEnd           = if ($targetDate -and $targetEndDate.Date -ne $targetDate.Date) { $targetEndDate.ToString('yyyy-MM-dd') } else { $null }
     RequestCount           = $requests.Count
     LatencyStats           = Get-StatisticsSummary -Values $latencyValues
     CpuStats                = Get-StatisticsSummary -Values $cpuValues

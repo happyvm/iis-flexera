@@ -25,3 +25,26 @@ Describe 'UTC timestamp normalization' {
         ((Get-UtcDayRange -Date ([datetime]'2026-10-25') -TimeZone $zone).EndUtc - (Get-UtcDayRange -Date ([datetime]'2026-10-25') -TimeZone $zone).StartUtc).TotalHours | Should -Be 25
     }
 }
+
+Describe 'Get-UtcDateRange' {
+    BeforeAll {
+        $zone = [TimeZoneInfo]::Utc
+    }
+
+    It 'matches Get-UtcDayRange when StartDate equals EndDate' {
+        $day = Get-UtcDayRange -Date ([datetime]'2026-08-20') -TimeZone $zone
+        $range = Get-UtcDateRange -StartDate ([datetime]'2026-08-20') -EndDate ([datetime]'2026-08-20') -TimeZone $zone
+        $range.StartUtc | Should -Be $day.StartUtc
+        $range.EndUtc | Should -Be $day.EndUtc
+    }
+
+    It 'spans from the start of StartDate to the start of the day after EndDate' {
+        $range = Get-UtcDateRange -StartDate ([datetime]'2026-08-20') -EndDate ([datetime]'2026-08-26') -TimeZone $zone
+        $range.StartUtc | Should -Be ([datetime]'2026-08-20T00:00:00Z')
+        $range.EndUtc | Should -Be ([datetime]'2026-08-27T00:00:00Z')
+    }
+
+    It 'throws when EndDate is before StartDate' {
+        { Get-UtcDateRange -StartDate ([datetime]'2026-08-26') -EndDate ([datetime]'2026-08-20') -TimeZone $zone } | Should -Throw
+    }
+}
