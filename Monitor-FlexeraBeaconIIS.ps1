@@ -59,6 +59,10 @@ function Write-CollectorEvent {
 
 Write-Host 'Starting Flexera Beacon IIS collector...'
 
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    Write-Warning "Running under PowerShell $($PSVersionTable.PSVersion) (Core edition). This project targets Windows PowerShell 5.1 first; the WebAdministration module runs through PowerShell 7's Windows PowerShell compatibility layer, which can make discovery cmdlets fail silently. If discovery reports no Flexera endpoint on a server known to have one, retry under powershell.exe (Windows PowerShell 5.1) before assuming the topology itself is the problem."
+}
+
 $runPath = New-RunDirectory -BasePath $OutputPath
 $collectorEventsPath   = Join-Path $runPath 'collector-events.csv'
 $countersPath          = Join-Path $runPath 'iis-counters.csv'
@@ -95,8 +99,22 @@ try {
     Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Configuration baseline capture failed: $($_.Exception.Message)"
 }
 
+# Log-field completeness preflight (SPECIFICATION.md section 16): explain
+# which analyses will be unavailable rather than silently fabricating them
+# once the run finishes.
+foreach ($siteLogging in @($baseline.Logging)) {
+    if ($siteLogging.AllRequiredFieldsPresent) { continue }
+
+    foreach ($missing in @($siteLogging.MissingFields)) {
+        Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Site '$($siteLogging.SiteName)' W3C logging is missing field '$($missing.Field)': $($missing.Impact)."
+    }
+}
+
 try {
-    $securityControls = Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline
+    # Wrapping the call in @() matters: PowerShell collapses a function's
+    # empty-array return into $null for the caller, and $null would fail
+    # Export-SecurityAuditCsv's mandatory -Controls binding below.
+    $securityControls = @(Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline)
     $securityControls | ConvertTo-Json -Depth 8 | Set-Content -Path $securityAuditJsonPath -Encoding UTF8
     Export-SecurityAuditCsv -Controls $securityControls -Path $securityAuditCsvPath
 } catch {
@@ -136,8 +154,13 @@ while ((Get-Date) -lt $endTime) {
     $tickStart = Get-Date
 
     try {
-        $currentMap = Get-WorkerProcessMap
-        $events = Update-WorkerProcessTracking -AppPoolNames $appPoolNames -CurrentMap $currentMap -PreviousMap $previousMap
+        # @() matters here too: zero worker processes for every tracked
+        # AppPool is valid (SPECIFICATION.md section 6.3), but PowerShell
+        # would otherwise collapse that empty result to $null, and
+        # Update-WorkerProcessTracking's mandatory -CurrentMap would then
+        # throw on every tick.
+        $currentMap = @(Get-WorkerProcessMap)
+        $events = @(Update-WorkerProcessTracking -AppPoolNames $appPoolNames -CurrentMap $currentMap -PreviousMap $previousMap)
         if ($events.Count -gt 0) {
             $exists = Test-Path -LiteralPath $appPoolEventsPath
             $events | Export-Csv -Path $appPoolEventsPath -NoTypeInformation -Append:$exists -Encoding UTF8

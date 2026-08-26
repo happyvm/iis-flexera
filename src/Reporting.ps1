@@ -16,6 +16,27 @@ function Format-StatLine {
     "P50: $($Stats.P50)$Unit, P90: $($Stats.P90)$Unit, P95: $($Stats.P95)$Unit, P99: $($Stats.P99)$Unit, Max: $($Stats.Max)$Unit (n=$($Stats.Count))"
 }
 
+function ConvertFrom-PSCustomObjectMap {
+    <#
+        Yields Key/Value pairs from either a hashtable or a PSCustomObject
+        (the shape a hashtable takes after a ConvertTo-Json/ConvertFrom-Json
+        round trip), so report rendering works the same whether Baseline
+        data came straight from the collector or was reloaded from disk.
+    #>
+    [CmdletBinding()]
+    param(
+        [object]$Object
+    )
+
+    if (-not $Object) { return @() }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        return @($Object.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Key = $_.Key; Value = $_.Value } })
+    }
+
+    return @($Object.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Key = $_.Name; Value = $_.Value } })
+}
+
 function New-CollectionReport {
     <#
         Renders the Summary object produced by Analyze-FlexeraBeaconIIS.ps1
@@ -74,6 +95,16 @@ function New-CollectionReport {
     [void]$sb.AppendLine()
     [void]$sb.AppendLine("Total requests: $($Summary.RequestCount)")
     [void]$sb.AppendLine()
+    if ($Summary.TrafficByPeriod -and @($Summary.TrafficByPeriod).Count -gt 0) {
+        [void]$sb.AppendLine("Requests by $($Summary.TrafficGranularity):")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine('| Period | Requests |')
+        [void]$sb.AppendLine('|---|---:|')
+        foreach ($p in $Summary.TrafficByPeriod) {
+            [void]$sb.AppendLine("| $($p.Period) | $($p.RequestCount) |")
+        }
+        [void]$sb.AppendLine()
+    }
 
     [void]$sb.AppendLine('## 5. Response-time profile')
     [void]$sb.AppendLine()
@@ -164,6 +195,80 @@ function New-CollectionReport {
         [void]$sb.AppendLine('No security-audit data was available for this run.')
     }
     [void]$sb.AppendLine()
+
+    [void]$sb.AppendLine('## 14. Flexera prerequisites & configuration baseline')
+    [void]$sb.AppendLine()
+    $baseline = $Summary.ConfigurationBaseline
+    if ($baseline) {
+        [void]$sb.AppendLine("Captured at: $($baseline.CapturedAt)")
+        [void]$sb.AppendLine()
+
+        [void]$sb.AppendLine('### IIS role-service prerequisites')
+        [void]$sb.AppendLine()
+        $roleServices = @(ConvertFrom-PSCustomObjectMap -Object $baseline.Iis.RoleServices)
+        if ($roleServices.Count -gt 0) {
+            [void]$sb.AppendLine('| Feature | State |')
+            [void]$sb.AppendLine('|---|---|')
+            foreach ($rs in $roleServices) {
+                [void]$sb.AppendLine("| $($rs.Key) | $($rs.Value) |")
+            }
+        } else {
+            [void]$sb.AppendLine('_Not captured for this run._')
+        }
+        [void]$sb.AppendLine()
+
+        [void]$sb.AppendLine('### Flexera endpoints')
+        [void]$sb.AppendLine()
+        $endpoints = @($baseline.Endpoints)
+        if ($endpoints.Count -gt 0) {
+            [void]$sb.AppendLine('| Endpoint | Site | AppPool | WebDAV | Authentication (Anon/Basic/Windows) |')
+            [void]$sb.AppendLine('|---|---|---|---|---|')
+            foreach ($ep in $endpoints) {
+                $auth = if ($ep.Authentication) { "$($ep.Authentication.AnonymousEnabled)/$($ep.Authentication.BasicEnabled)/$($ep.Authentication.WindowsEnabled)" } else { 'Unknown' }
+                [void]$sb.AppendLine("| $($ep.Name) | $($ep.Site) | $($ep.AppPool) | $($ep.WebDav) | $auth |")
+            }
+        } else {
+            [void]$sb.AppendLine('_Not captured for this run._')
+        }
+        [void]$sb.AppendLine()
+
+        [void]$sb.AppendLine('### W3C logging field completeness')
+        [void]$sb.AppendLine()
+        $loggingSites = @($baseline.Logging)
+        if ($loggingSites.Count -gt 0) {
+            foreach ($siteLogging in $loggingSites) {
+                [void]$sb.AppendLine("- Site '$($siteLogging.SiteName)': enabled=$($siteLogging.Enabled), format=$($siteLogging.LogFormat)")
+                foreach ($missing in @($siteLogging.MissingFields)) {
+                    [void]$sb.AppendLine("  - Missing '$($missing.Field)': $($missing.Impact)")
+                }
+            }
+        } else {
+            [void]$sb.AppendLine('_Not captured for this run._')
+        }
+        [void]$sb.AppendLine()
+
+        [void]$sb.AppendLine('### Authentication consistency (ManageSoftRL vs ManageSoftDL)')
+        [void]$sb.AppendLine()
+        $authFindings = @($baseline.AuthenticationConsistency)
+        if ($authFindings.Count -gt 0) {
+            foreach ($f in $authFindings) {
+                [void]$sb.AppendLine("- $($f.Status): $($f.EffectiveRecommendation)")
+            }
+        } else {
+            [void]$sb.AppendLine('_Not applicable: ManageSoftRL/ManageSoftDL were not both discovered on the same site._')
+        }
+        [void]$sb.AppendLine()
+
+        if ($baseline.Warnings -and @($baseline.Warnings).Count -gt 0) {
+            [void]$sb.AppendLine('### Baseline collection warnings')
+            [void]$sb.AppendLine()
+            foreach ($w in $baseline.Warnings) { [void]$sb.AppendLine("- $w") }
+            [void]$sb.AppendLine()
+        }
+    } else {
+        [void]$sb.AppendLine('No configuration-baseline data was available for this run.')
+        [void]$sb.AppendLine()
+    }
 
     Set-Content -Path $Path -Value $sb.ToString() -Encoding UTF8
 }

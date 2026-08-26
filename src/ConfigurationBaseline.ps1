@@ -89,6 +89,208 @@ function Get-RequestFilteringExtensionState {
     return $result
 }
 
+function Get-IisAuthenticationState {
+    <#
+        Reads the effective Anonymous/Basic/Windows authentication state
+        for a site/path. Never reads credentials - only the enabled/
+        disabled flag per provider (FLEXERA-IIS-BASELINE.md section 3).
+        A provider whose state cannot be read is left $null rather than
+        assumed disabled.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SitePath
+    )
+
+    Import-Module WebAdministration -ErrorAction Stop
+
+    function Get-AuthFlag([string]$Path, [string]$Section) {
+        try {
+            $prop = Get-WebConfigurationProperty -Filter "/system.webServer/security/authentication/$Section" -PSPath $Path -Name enabled -ErrorAction Stop
+            return [bool]$prop.Value
+        } catch {
+            return $null
+        }
+    }
+
+    [pscustomobject]@{
+        AnonymousEnabled = Get-AuthFlag -Path $SitePath -Section 'anonymousAuthentication'
+        BasicEnabled     = Get-AuthFlag -Path $SitePath -Section 'basicAuthentication'
+        WindowsEnabled   = Get-AuthFlag -Path $SitePath -Section 'windowsAuthentication'
+    }
+}
+
+function Get-BeaconTopologyType {
+    <#
+        Flexera documents that a standalone Beacon's ManageSoftRL and
+        ManageSoftDL share the same directory and web.config
+        (FLEXERA-IIS-BASELINE.md section 3.1). Identical physical paths
+        are used as the observable proxy for that; a difference is
+        reported as 'Distinct' rather than asserted to be the co-installed
+        topology, since that cannot be confirmed from physical path alone.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$RLPhysicalPath,
+        [string]$DLPhysicalPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RLPhysicalPath) -or [string]::IsNullOrWhiteSpace($DLPhysicalPath)) {
+        return 'Unknown'
+    }
+
+    if ($RLPhysicalPath -eq $DLPhysicalPath) { return 'Standalone' }
+    return 'Distinct'
+}
+
+function Get-AuthenticationConsistencyFinding {
+    <#
+        FB-IIS-BASE-001: for a confidently standalone topology, Flexera
+        documents that mismatched authentication between ManageSoftRL and
+        ManageSoftDL causes HTTP 409 upload failures
+        (FLEXERA-IIS-BASELINE.md section 3.1). When topology cannot be
+        confirmed as standalone, the finding is NOT_APPLICABLE rather than
+        a failure, per the "do not declare non-compliant when topology is
+        unclear" rule in section 15.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Standalone', 'Distinct', 'Unknown')][string]$TopologyType,
+        [object]$RLAuth,
+        [object]$DLAuth
+    )
+
+    $base = [ordered]@{
+        ControlId               = 'FB-IIS-BASE-001'
+        Category                = 'Authentication'
+        ObservedValue           = "Topology: $TopologyType"
+        MicrosoftGuidance       = $null
+        FlexeraGuidance         = 'A standalone Beacon shares one directory/web.config for ManageSoftRL and ManageSoftDL, so both must use consistent authentication; Flexera documents HTTP 409 upload failures otherwise. A co-installed Beacon may intentionally use different authentication per location.'
+        EffectiveRecommendation = $null
+        Status                  = $null
+        Priority                = 'Medium'
+    }
+
+    if ($TopologyType -ne 'Standalone') {
+        $base.EffectiveRecommendation = 'Topology is not confidently standalone (ManageSoftRL/ManageSoftDL physical paths differ or are unknown); do not require matching authentication between the two locations.'
+        $base.Status = 'NOT_APPLICABLE'
+        $base.Priority = 'Informational'
+        return [pscustomobject]$base
+    }
+
+    if (-not $RLAuth -or -not $DLAuth) {
+        $base.EffectiveRecommendation = 'Standalone topology detected but effective authentication could not be read for one or both locations.'
+        $base.Status = 'UNKNOWN'
+        return [pscustomobject]$base
+    }
+
+    $match = ($RLAuth.AnonymousEnabled -eq $DLAuth.AnonymousEnabled) -and
+             ($RLAuth.BasicEnabled -eq $DLAuth.BasicEnabled) -and
+             ($RLAuth.WindowsEnabled -eq $DLAuth.WindowsEnabled)
+
+    $base.ObservedValue = "Topology: $TopologyType; RL: Anonymous=$($RLAuth.AnonymousEnabled), Basic=$($RLAuth.BasicEnabled), Windows=$($RLAuth.WindowsEnabled); DL: Anonymous=$($DLAuth.AnonymousEnabled), Basic=$($DLAuth.BasicEnabled), Windows=$($DLAuth.WindowsEnabled)"
+
+    if ($match) {
+        $base.EffectiveRecommendation = 'Authentication is consistent between ManageSoftRL and ManageSoftDL, as required for a standalone Beacon.'
+        $base.Status = 'PASS'
+    } else {
+        $base.EffectiveRecommendation = 'ManageSoftRL and ManageSoftDL use inconsistent authentication despite sharing a directory/web.config; Flexera documents this as a cause of HTTP 409 upload failures. Align the authentication settings for both locations.'
+        $base.Status = 'FAIL'
+        $base.Priority = 'High'
+    }
+
+    return [pscustomobject]$base
+}
+
+function Get-IisLoggingConfiguration {
+    <#
+        Reads the site's logFile configuration and maps IIS's
+        logExtFileFlags names to the canonical W3C field names used
+        elsewhere in this project (FLEXERA-IIS-BASELINE.md section 7).
+        IIS does not expose one universal "logging enabled" boolean once
+        the HTTP Logging role service is present; this reports the
+        logFile section's presence/format as the closest available
+        signal and must be validated against a real IIS host. Field
+        mapping only applies when LogFormat is W3C.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SiteName
+    )
+
+    Import-Module WebAdministration -ErrorAction Stop
+
+    $fieldMap = [ordered]@{
+        'Date' = 'date'; 'Time' = 'time'; 'SiteName' = 's-sitename'; 'Method' = 'cs-method'
+        'UriStem' = 'cs-uri-stem'; 'UriQuery' = 'cs-uri-query'; 'HttpStatus' = 'sc-status'
+        'HttpSubStatus' = 'sc-substatus'; 'Win32Status' = 'sc-win32-status'
+        'BytesRecv' = 'cs-bytes'; 'BytesSent' = 'sc-bytes'; 'TimeTaken' = 'time-taken'
+    }
+
+    try {
+        $logFile = Get-ItemProperty -Path "IIS:\Sites\$SiteName" -Name logFile -ErrorAction Stop
+    } catch {
+        return [pscustomobject]@{
+            SiteName = $SiteName; Enabled = 'Unknown'; LogFormat = $null; Directory = $null; EnabledFields = @()
+        }
+    }
+
+    $logFormat = "$($logFile.logFormat)"
+    $mappedFields = @()
+
+    if ($logFormat -eq 'W3C') {
+        $rawFlags = @("$($logFile.logExtFileFlags)" -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $mappedFields = @($rawFlags | ForEach-Object { if ($fieldMap.Contains($_)) { $fieldMap[$_] } } | Where-Object { $_ })
+    }
+
+    [pscustomobject]@{
+        SiteName      = $SiteName
+        Enabled       = $true
+        LogFormat     = $logFormat
+        Directory     = "$($logFile.directory)"
+        EnabledFields = $mappedFields
+    }
+}
+
+function Test-RequiredW3CFieldsPresent {
+    <#
+        Checks the fields this project needs against what is actually
+        enabled, and explains which analyses become unavailable for each
+        missing field, per SPECIFICATION.md section 16. Never silently
+        fabricates a missing metric.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$EnabledFields
+    )
+
+    $requiredFieldImpacts = [ordered]@{
+        'date'            = 'timestamps cannot be computed; all time-based analysis is unavailable'
+        'time'            = 'timestamps cannot be computed; all time-based analysis is unavailable'
+        's-sitename'      = 'requests cannot be attributed to a specific site'
+        'cs-method'       = 'requests cannot be broken down by HTTP method'
+        'cs-uri-stem'     = 'endpoint-level aggregation (top endpoints, per-endpoint latency) is unavailable'
+        'sc-status'       = 'HTTP status-code distribution is unavailable'
+        'sc-substatus'    = 'detailed IIS status-code breakdown (e.g. 401.2) is unavailable'
+        'sc-win32-status' = 'Win32 failure-code diagnosis is unavailable'
+        'cs-bytes'        = 'inbound request-byte analysis is unavailable'
+        'sc-bytes'        = 'outbound response-byte analysis is unavailable'
+        'time-taken'      = 'latency percentiles (P50/P95/P99) are unavailable'
+    }
+
+    $missing = New-Object System.Collections.Generic.List[object]
+    foreach ($field in $requiredFieldImpacts.Keys) {
+        if ($EnabledFields -notcontains $field) {
+            $missing.Add([pscustomobject]@{ Field = $field; Impact = $requiredFieldImpacts[$field] }) | Out-Null
+        }
+    }
+
+    [pscustomobject]@{
+        MissingFields            = $missing.ToArray()
+        AllRequiredFieldsPresent = ($missing.Count -eq 0)
+    }
+}
+
 function New-FlexeraConfigurationBaseline {
     <#
         Produces the configuration-baseline.json structure suggested in
@@ -124,6 +326,7 @@ function New-FlexeraConfigurationBaseline {
 
         $webDav = 'Unknown'
         $requestFiltering = [ordered]@{}
+        $authentication = $null
 
         try { $webDav = Get-WebDavState -SitePath $sitePath }
         catch { $warnings.Add("WebDAV check failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
@@ -131,26 +334,68 @@ function New-FlexeraConfigurationBaseline {
         try { $requestFiltering = Get-RequestFilteringExtensionState -SitePath $sitePath -Extensions $endpointExtensions }
         catch { $warnings.Add("Request Filtering check failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
 
+        try { $authentication = Get-IisAuthenticationState -SitePath $sitePath }
+        catch { $warnings.Add("Authentication check failed for '$($endpoint.EndpointName)': $($_.Exception.Message)") | Out-Null }
+
         [pscustomobject]@{
             Name             = $endpoint.EndpointName
             Site             = $endpoint.SiteName
             AppPool          = $endpoint.AppPoolName
             Path             = $endpoint.Path
+            PhysicalPath     = $endpoint.PhysicalPath
             WebDav           = $webDav
             RequestFiltering = $requestFiltering
+            Authentication   = $authentication
         }
     }
+    $endpointBaselines = @($endpointBaselines)
+
+    $siteNames = @($Topology.SelectedSites | Select-Object -ExpandProperty Name -Unique)
+    $loggingBySite = foreach ($siteName in $siteNames) {
+        try {
+            $loggingConfig = Get-IisLoggingConfiguration -SiteName $siteName
+            $fieldCheck = Test-RequiredW3CFieldsPresent -EnabledFields $loggingConfig.EnabledFields
+            [pscustomobject]@{
+                SiteName                 = $siteName
+                Enabled                  = $loggingConfig.Enabled
+                LogFormat                = $loggingConfig.LogFormat
+                Directory                = $loggingConfig.Directory
+                EnabledFields            = $loggingConfig.EnabledFields
+                MissingFields            = $fieldCheck.MissingFields
+                AllRequiredFieldsPresent = $fieldCheck.AllRequiredFieldsPresent
+            }
+        } catch {
+            $warnings.Add("Logging configuration check failed for site '$siteName': $($_.Exception.Message)") | Out-Null
+        }
+    }
+    $loggingBySite = @($loggingBySite)
+
+    # Pair ManageSoftRL/ManageSoftDL within the same site to evaluate the
+    # standalone authentication-consistency rule (FLEXERA-IIS-BASELINE.md
+    # section 3.1); other endpoint names are not evaluated for this rule.
+    $authConsistencyFindings = foreach ($siteName in $siteNames) {
+        $rl = $endpointBaselines | Where-Object { $_.Site -eq $siteName -and $_.Name -eq 'ManageSoftRL' } | Select-Object -First 1
+        $dl = $endpointBaselines | Where-Object { $_.Site -eq $siteName -and $_.Name -eq 'ManageSoftDL' } | Select-Object -First 1
+
+        if ($rl -and $dl) {
+            $topologyType = Get-BeaconTopologyType -RLPhysicalPath $rl.PhysicalPath -DLPhysicalPath $dl.PhysicalPath
+            Get-AuthenticationConsistencyFinding -TopologyType $topologyType -RLAuth $rl.Authentication -DLAuth $dl.Authentication
+        }
+    }
+    $authConsistencyFindings = @($authConsistencyFindings)
 
     [pscustomobject]@{
-        FlexeraBaselineVersion = 1
-        CapturedAt             = (Get-Date).ToString('o')
-        Iis                    = [pscustomobject]@{
+        FlexeraBaselineVersion     = 1
+        CapturedAt                 = (Get-Date).ToString('o')
+        Iis                        = [pscustomobject]@{
             Version      = $Topology.IisVersion
             RoleServices = $roleServiceStatus
         }
-        Sites     = $Topology.SelectedSites
-        AppPools  = $Topology.SelectedAppPools
-        Endpoints = @($endpointBaselines)
-        Warnings  = @($warnings)
+        Sites                      = $Topology.SelectedSites
+        AppPools                   = $Topology.SelectedAppPools
+        Endpoints                  = $endpointBaselines
+        Logging                    = $loggingBySite
+        AuthenticationConsistency  = $authConsistencyFindings
+        Warnings                   = @($warnings)
     }
 }

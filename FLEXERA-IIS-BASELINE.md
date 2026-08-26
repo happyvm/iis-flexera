@@ -118,6 +118,10 @@ If topology cannot be determined reliably, report the observed values without de
 
 Never collect or persist passwords.
 
+#### Implementation status (iis-flexera v0.1)
+
+This rule is implemented as control `FB-IIS-BASE-001` in `configuration-baseline.json`'s `AuthenticationConsistency` array (`src/ConfigurationBaseline.ps1`). Topology is inferred by comparing the `ManageSoftRL`/`ManageSoftDL` physical paths: an identical path is reported as `Standalone` and mismatched authentication then produces a `FAIL` (citing the documented HTTP 409 upload failure); a differing path is reported as `Distinct` and the finding is `NOT_APPLICABLE` rather than a failure, per the rule above. `Distinct` is a neutral label, not an assertion that the topology is co-installed.
+
 References:
 
 - https://docs.flexera.com/flexera-one/it-assets/inventory-beacon/prerequisites-for-inventory-beacons
@@ -238,6 +242,10 @@ time-taken
 ```
 
 If one or more fields are absent, the monitor must explain the unavailable analyses rather than modify IIS logging.
+
+#### Implementation status (iis-flexera v0.1)
+
+`New-FlexeraConfigurationBaseline` (`src/ConfigurationBaseline.ps1`) captures a `Logging` entry per selected site: whether a `logFile` section could be read, its `LogFormat`/`Directory`, and the effective W3C fields (mapped from IIS's `logExtFileFlags` names). `Test-RequiredW3CFieldsPresent` compares that against the required-field list above and records, per missing field, exactly which analysis becomes unavailable - this preflight check runs before the sampling loop starts (`Monitor-FlexeraBeaconIIS.ps1`) and the missing-field/impact pairs are written to `collector-events.csv` as `WARNING` entries. IIS does not expose one universal "logging enabled" boolean once the HTTP Logging role service is present, so `Enabled` reflects the `logFile` section's presence as the closest available signal; this must be validated against a real IIS host. Field mapping only applies when `LogFormat` is `W3C`.
 
 ---
 
@@ -425,6 +433,23 @@ Suggested conceptual structure:
 ```
 
 This baseline is captured once at startup and, optionally, again at the end of the seven-day run to identify configuration drift.
+
+#### Implementation status (iis-flexera v0.1)
+
+`New-FlexeraConfigurationBaseline` (`src/ConfigurationBaseline.ps1`) implements this with two additions beyond the sketch above, each documented in the sections that motivate them (7 and 3.1):
+
+```json
+{
+  "Logging": [
+    { "SiteName": null, "Enabled": null, "LogFormat": null, "Directory": null, "EnabledFields": [], "MissingFields": [ { "Field": null, "Impact": null } ], "AllRequiredFieldsPresent": null }
+  ],
+  "AuthenticationConsistency": [
+    { "ControlId": "FB-IIS-BASE-001", "Status": null, "ObservedValue": null, "EffectiveRecommendation": null }
+  ]
+}
+```
+
+Each `Endpoints[]` entry also carries `PhysicalPath` (used to infer topology for the authentication-consistency check) and `Authentication` (`AnonymousEnabled`/`BasicEnabled`/`WindowsEnabled`, each `$null` when unreadable). `bindings` per endpoint is not yet populated; binding/certificate data currently lives only on `Sites[].Bindings` in `metadata.json`.
 
 ---
 

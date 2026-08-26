@@ -59,6 +59,12 @@ if (Test-Path -LiteralPath $securityAuditPath) {
     $securityControls = @(Get-Content -LiteralPath $securityAuditPath -Raw | ConvertFrom-Json)
 }
 
+$configBaseline = $null
+$configBaselinePath = Join-Path $RunPath 'configuration-baseline.json'
+if (Test-Path -LiteralPath $configBaselinePath) {
+    $configBaseline = Get-Content -LiteralPath $configBaselinePath -Raw | ConvertFrom-Json
+}
+
 $requests = @()
 $logWarnings = New-Object System.Collections.Generic.List[string]
 
@@ -89,6 +95,14 @@ $endpointStats = @(Group-RequestsByEndpoint -Records $requests | Sort-Object Req
 
 $recycleCount = @($appPoolEvents | Where-Object { $_.EventType -eq 'OverlappedRecycle' }).Count
 
+$timestamps = @($requests | Where-Object { $null -ne $_.Timestamp } | ForEach-Object { $_.Timestamp })
+$trafficGranularity = 'Hour'
+if ($timestamps.Count -gt 0) {
+    $spanHours = (($timestamps | Measure-Object -Maximum).Maximum - ($timestamps | Measure-Object -Minimum).Minimum).TotalHours
+    if ($spanHours -gt 48) { $trafficGranularity = 'Day' }
+}
+$trafficByPeriod = @(Get-RequestVolumeByPeriod -Records $requests -Granularity $trafficGranularity)
+
 $allWarnings = New-Object System.Collections.Generic.List[string]
 foreach ($w in $logWarnings) { $allWarnings.Add($w) | Out-Null }
 if ($metadata -and $metadata.warnings) {
@@ -109,6 +123,9 @@ $summary = [pscustomobject]@{
     AppPoolRecycleCount     = $recycleCount
     Warnings                = @($allWarnings)
     SecurityControls        = $securityControls
+    ConfigurationBaseline   = $configBaseline
+    TrafficByPeriod         = $trafficByPeriod
+    TrafficGranularity      = $trafficGranularity
 }
 
 $summaryPath = Join-Path $RunPath 'summary.json'

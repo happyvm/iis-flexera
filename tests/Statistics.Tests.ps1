@@ -70,6 +70,34 @@ Describe 'Get-ResponseStatusBreakdown' {
     }
 }
 
+Describe 'Get-RequestVolumeByPeriod' {
+    It 'buckets requests by hour' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T08:05:00Z') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T08:45:00Z') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T09:10:00Z') }
+        )
+        $periods = @(Get-RequestVolumeByPeriod -Records $records -Granularity 'Hour')
+        $periods.Count | Should -Be 2
+        ($periods | Where-Object { $_.Period -eq '2026-08-19T08:00:00' }).RequestCount | Should -Be 2
+    }
+
+    It 'buckets requests by day' {
+        $records = @(
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T08:05:00Z') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-19T23:45:00Z') },
+            [pscustomobject]@{ Timestamp = (Get-Date '2026-08-20T00:10:00Z') }
+        )
+        $periods = @(Get-RequestVolumeByPeriod -Records $records -Granularity 'Day')
+        $periods.Count | Should -Be 2
+    }
+
+    It 'ignores records without a timestamp rather than throwing' {
+        $records = @([pscustomobject]@{ Timestamp = $null })
+        { Get-RequestVolumeByPeriod -Records $records -Granularity 'Hour' } | Should -Not -Throw
+    }
+}
+
 Describe 'Group-RequestsByEndpoint' {
     It 'aggregates request count and latency percentiles per endpoint, ignoring the query string' {
         $records = @(
