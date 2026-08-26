@@ -1,4 +1,5 @@
 BeforeAll {
+    . "$PSScriptRoot/../src/Time.ps1"
     . "$PSScriptRoot/../src/Statistics.ps1"
 }
 
@@ -115,7 +116,7 @@ Describe 'Get-RequestVolumeByPeriod' {
         )
         $periods = @(Get-RequestVolumeByPeriod -Records $records -Granularity 'Hour')
         $periods.Count | Should -Be 2
-        ($periods | Where-Object { $_.Period -eq '2026-08-19T08:00:00' }).RequestCount | Should -Be 2
+        ($periods | Where-Object { $_.Period -eq '2026-08-19T08:00:00Z' }).RequestCount | Should -Be 2
     }
 
     It 'buckets requests by day' {
@@ -144,5 +145,35 @@ Describe 'Group-RequestsByEndpoint' {
         $grouped = @(Group-RequestsByEndpoint -Records $records)
         ($grouped | Where-Object { $_.UriStem -eq '/ManageSoftDL/policy.xml' }).RequestCount | Should -Be 2
         ($grouped | Where-Object { $_.UriStem -eq '/ManageSoftRL/upload.aspx' }).RequestCount | Should -Be 1
+    }
+}
+
+Describe 'Get-Http405Analysis' {
+    It 'aggregates 405 responses by method, endpoint, client and UTC hour' {
+        $records = @(
+            [pscustomobject]@{ Timestamp=[datetime]'2026-08-26T10:01:00Z'; StatusCode=405; SubStatus=0; Win32Status=0; Method='POST'; UriStem='/ManageSoftDL/x'; ClientIp='10.0.0.1' },
+            [pscustomobject]@{ Timestamp=[datetime]'2026-08-26T10:02:00Z'; StatusCode=405; SubStatus=1; Win32Status=2; Method='POST'; UriStem='/ManageSoftDL/x'; ClientIp='10.0.0.1' },
+            [pscustomobject]@{ Timestamp=[datetime]'2026-08-26T10:03:00Z'; StatusCode=200; SubStatus=0; Win32Status=0; Method='GET'; UriStem='/ManageSoftDL/x'; ClientIp='10.0.0.1' }
+        )
+        $result = Get-Http405Analysis $records
+        $result.Count | Should -Be 2
+        $result.PercentageOfAllRequests | Should -Be 66.67
+        $result.ByMethod[0].Method | Should -Be 'POST'
+        $result.ByEndpoint[0].UriStem | Should -Be '/ManageSoftDL/x'
+        $result.ByClient[0].ClientIp | Should -Be '10.0.0.1'
+        $result.ByHourUtc[0].Count | Should -Be 2
+    }
+}
+
+Describe 'Get-IisCorrelationTimeline' {
+    It 'preserves a queue that is always zero and aligns sources by UTC minute' {
+        $requests = @([pscustomobject]@{ Timestamp='2026-08-26T12:00:10Z'; StatusCode=405; TimeTakenMs=500 })
+        $workers = @([pscustomobject]@{ Timestamp='2026-08-26T14:00:15+02:00'; CPUPercent='12'; PrivateBytes='1000' })
+        $counters = @([pscustomobject]@{ Timestamp='2026-08-26T13:00:20+01:00'; QueueSize='0' })
+        $timeline = @(Get-IisCorrelationTimeline -Requests $requests -WorkerSamples $workers -CounterSamples $counters)
+        $timeline.Count | Should -Be 1
+        $timeline[0].Http405Count | Should -Be 1
+        $timeline[0].QueueSizeMax | Should -Be 0
+        $timeline[0].WorkerCpuMaxPercent | Should -Be 12
     }
 }

@@ -264,11 +264,68 @@ Current state (v0.1, in progress):
 
 - `Monitor-FlexeraBeaconIIS.ps1` — preflight (discovery, configuration baseline, security audit) plus the timed CSV/JSON collection loop.
 - `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`. Pass `-Date 2026-08-25` to restrict the report to a single calendar day (local time) - out of a multi-day `Monitor-FlexeraBeaconIIS.ps1` run, or by pointing `-LogPath` directly at one day's IIS log file(s) without ever having run the collector.
-- `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
+- `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. Counter paths are resolved once per site/queue and cached for the run; all tracked worker PIDs share one CIM query per tick. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
+- Timed CSV collection keeps its output streams open and flushes after each write, avoiding per-row file reopen and existence checks while retaining incremental durability.
 - `src/IisLogs.ps1`, `src/Statistics.ps1` — header-driven W3C log parsing and percentile/status statistics. Platform-independent; covered by Pester tests in `tests/`.
 - `src/ConfigurationBaseline.ps1` — read-only Flexera configuration-baseline snapshot (`configuration-baseline.json`), including per-endpoint effective authentication, per-site W3C logging/field-completeness, and the `ManageSoftRL`/`ManageSoftDL` authentication-consistency check (`FB-IIS-BASE-001`, FLEXERA-IIS-BASELINE.md section 3.1).
 - `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and an orchestration wiring them to discovered topology and the configuration baseline: HTTPS/port, TLS certificate validity/name-match, mutual TLS, Basic/Anonymous authentication, WebDAV, Request Filtering extensions, AppPool identity and HTTP logging.
 - `src/Reporting.ps1` — Markdown report generation, including a dedicated configuration-baseline section and requests-by-hour/day traffic breakdown.
+
+### Diagnostic data flow and UTC model
+
+The collector remains read-only. It refreshes the authoritative `appcmd list wps`
+PID-to-AppPool map every tick, performs two batched CIM reads for active workers
+(formatted performance plus non-secret process metadata), samples the selected IIS
+site/queue counters, and flushes persistent CSV streams. It does not restart or
+recycle IIS, change logging, handlers, authentication, Request Filtering, the
+registry, or any Flexera setting.
+
+Collector CSV and metadata timestamps are emitted as ISO 8601 UTC values. W3C IIS
+`date`/`time` fields are interpreted as UTC, as defined by the W3C IIS log format.
+Analysis normalizes every source to UTC before filtering. `-Date` denotes a calendar
+day in the analyzer machine timezone by default; use `-DateTimeZoneId` to select the
+Beacon/report timezone explicitly. `-DisplayTimeZone UTC|Local|Both` controls report
+display without changing filtering or calculations. DST-aware UTC boundaries are
+used rather than comparing `YYYY-MM-DD` strings.
+
+Optional inputs are classified as `ABSENT`, `EMPTY`, `INVALID`, `PRESENT`, or
+`OUTSIDE_PERIOD` in the Data Quality report section. Thus an existing counter file
+whose rows fall outside the selected timezone-aware window is not incorrectly
+reported as missing.
+
+### HTTP 405 and latency interpretation
+
+The analyzer breaks HTTP 405 responses down by method, endpoint, client,
+substatus/Win32 status, and UTC hour. Client and User-Agent attribution is only
+available when the corresponding W3C fields are already enabled; the tool reports
+missing fields and never enables them. Endpoint categories are diagnostic pattern
+labels, not authoritative statements about Flexera internals.
+
+IIS `time-taken` can include network/client transfer effects. The report therefore
+shows response size and derived `bytes sent / elapsed second` throughput beside
+slow requests. A long large-file transfer is not automatically classified as IIS
+processing latency, and the project does not claim universal Flexera CPU, queue,
+request-rate, or latency thresholds.
+
+### Generated run files
+
+- `metadata.json`: UTC observation bounds, topology, versions and warnings.
+- `iis-counters.csv`: site-level Web Service and pool-level HTTP.sys samples.
+- `worker-processes.csv`: PID/AppPool, instantaneous and cumulative CPU evidence,
+  memory, threads, handles, start time, uptime and workers-per-pool.
+- `apppool-events.csv`: worker starts/stops and overlapped-recycle observations.
+- `configuration-baseline.json`: effective read-only IIS/Flexera configuration,
+  including AppPool process/recycling/failure/CPU settings and endpoint handlers,
+  modules and Request Filtering evidence.
+- `security-audit.json` / `.csv`: vendor-aware security findings and guidance; the
+  normative source catalogue remains in `SECURITY-AUDIT.md` until structured source
+  fields are implemented.
+- `summary.json` / `report.md`: normalized analysis and human-readable report.
+
+At the default 15-second interval, expensive worker queries and performance-counter
+reads are batched and counter availability is probed once per instance. Actual
+overhead and Windows counter availability still require validation on the target
+Beacon, especially for Web Gardens (`maxProcesses > 1`) and across real recycles.
 
 ### Platform note: PowerShell 7 support
 

@@ -69,7 +69,7 @@ function Update-WorkerProcessTracking {
     )
 
     $events = New-Object System.Collections.Generic.List[object]
-    $now = Get-Date
+    $now = (Get-Date).ToUniversalTime()
 
     foreach ($poolName in $AppPoolNames) {
         $currentPids  = @($CurrentMap  | Where-Object { $_.AppPoolName -eq $poolName } | Select-Object -ExpandProperty PID)
@@ -115,7 +115,7 @@ function Update-WorkerProcessTracking {
     return $events
 }
 
-function Get-ProcessSample {
+function Get-ProcessSamples {
     <#
         PID-safe process metrics via the formatted-data WMI/CIM class,
         keyed by IDProcess rather than the "w3wp#1"-style instance name
@@ -124,20 +124,48 @@ function Get-ProcessSample {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][int]$ProcessId
+        [Parameter(Mandatory)][AllowEmptyCollection()][int[]]$ProcessId
     )
 
-    $proc = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $ProcessId" -ErrorAction SilentlyContinue
-    if (-not $proc) { return $null }
+    $uniqueProcessIds = @($ProcessId | Select-Object -Unique)
+    if ($uniqueProcessIds.Count -eq 0) { return }
 
-    [pscustomobject]@{
-        PID             = $ProcessId
-        CPUPercent      = $proc.PercentProcessorTime
-        WorkingSetBytes = $proc.WorkingSet
-        PrivateBytes    = $proc.PrivateBytes
-        ThreadCount     = $proc.ThreadCount
-        HandleCount     = $proc.HandleCount
+    $filter = ($uniqueProcessIds | ForEach-Object { "IDProcess = $_" }) -join ' OR '
+    $processes = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter $filter -ErrorAction SilentlyContinue)
+    $processDetails = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction SilentlyContinue)
+    $detailsByPid = @{}
+    foreach ($detail in $processDetails) { $detailsByPid[[int]$detail.ProcessId] = $detail }
+
+    foreach ($proc in $processes) {
+        $detail = $detailsByPid[[int]$proc.IDProcess]
+        $startTimeUtc = $null
+        if ($detail -and $detail.CreationDate) {
+            $startTimeUtc = ConvertTo-UtcDateTime -Value $detail.CreationDate
+        }
+        $cpuTotalSeconds = $null
+        if ($detail -and $null -ne $detail.KernelModeTime -and $null -ne $detail.UserModeTime) {
+            $cpuTotalSeconds = [math]::Round(([double]$detail.KernelModeTime + [double]$detail.UserModeTime) / 10000000, 3)
+        }
+        [pscustomobject]@{
+            PID             = [int]$proc.IDProcess
+            CPUPercent      = $proc.PercentProcessorTime
+            WorkingSetBytes = $proc.WorkingSet
+            PrivateBytes    = $proc.PrivateBytes
+            ThreadCount     = $proc.ThreadCount
+            HandleCount     = $proc.HandleCount
+            VirtualBytes    = $proc.VirtualBytes
+            UptimeSeconds   = $proc.ElapsedTime
+            StartTimeUtc    = $startTimeUtc
+            CpuTotalSeconds = $cpuTotalSeconds
+        }
     }
+}
+
+function Get-ProcessSample {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][int]$ProcessId)
+
+    return @(Get-ProcessSamples -ProcessId @($ProcessId))[0]
 }
 
 function Get-NormalizedCpuPercent {

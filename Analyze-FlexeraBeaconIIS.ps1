@@ -10,8 +10,9 @@
     latency analysis is unavailable and the report says so explicitly
     rather than fabricating figures (SPECIFICATION.md section 16).
 
-    Pass -Date to restrict the report to a single calendar day (local
-    time), filtering requests, counters, worker-process samples and
+    Pass -Date to restrict the report to a single calendar day in the
+    selected -DateTimeZoneId (analyzer-local timezone by default), filtering
+    against DST-aware UTC boundaries for requests, counters, worker samples and
     AppPool events alike. Useful both to re-analyze one day out of a
     multi-day Monitor-FlexeraBeaconIIS.ps1 run, and to analyze IIS's own
     daily-rotated W3C logs for a single past day without ever running the
@@ -30,11 +31,15 @@
 param(
     [Parameter(Mandatory)][string]$RunPath,
     [string[]]$LogPath,
-    [string]$Date
+    [string]$Date,
+    [ValidateSet('UTC', 'Local', 'Both')][string]$DisplayTimeZone = 'UTC',
+    [string]$DateTimeZoneId
 )
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'src/Time.ps1')
+. (Join-Path $PSScriptRoot 'src/InputData.ps1')
 . (Join-Path $PSScriptRoot 'src/IisLogs.ps1')
 . (Join-Path $PSScriptRoot 'src/Statistics.ps1')
 . (Join-Path $PSScriptRoot 'src/Reporting.ps1')
@@ -43,40 +48,25 @@ if (-not (Test-Path -LiteralPath $RunPath)) {
     throw "Run path not found: $RunPath"
 }
 
-$metadataPath = Join-Path $RunPath 'metadata.json'
-$metadata = $null
-if (Test-Path -LiteralPath $metadataPath) {
-    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
-}
+$metadataInput = Import-CollectionJson -Path (Join-Path $RunPath 'metadata.json')
+$counterInput = Import-CollectionCsv -Path (Join-Path $RunPath 'iis-counters.csv')
+$workerInput = Import-CollectionCsv -Path (Join-Path $RunPath 'worker-processes.csv')
+$appPoolEventInput = Import-CollectionCsv -Path (Join-Path $RunPath 'apppool-events.csv')
+$securityInput = Import-CollectionJson -Path (Join-Path $RunPath 'security-audit.json')
+$baselineInput = Import-CollectionJson -Path (Join-Path $RunPath 'configuration-baseline.json')
 
-$counters = @()
-$countersPath = Join-Path $RunPath 'iis-counters.csv'
-if (Test-Path -LiteralPath $countersPath) {
-    $counters = @(Import-Csv -LiteralPath $countersPath)
-}
+$metadata = $metadataInput.Data
+$counters = @($counterInput.Records)
+$workerSamples = @($workerInput.Records)
+$appPoolEvents = @($appPoolEventInput.Records)
+$securityControls = if ($securityInput.Status -eq 'PRESENT') { @($securityInput.Data) } else { @() }
+$configBaseline = $baselineInput.Data
+$dataQuality = @($metadataInput, $counterInput, $workerInput, $appPoolEventInput, $securityInput, $baselineInput)
 
-$workerSamples = @()
-$workerPath = Join-Path $RunPath 'worker-processes.csv'
-if (Test-Path -LiteralPath $workerPath) {
-    $workerSamples = @(Import-Csv -LiteralPath $workerPath)
-}
-
-$appPoolEvents = @()
-$appPoolEventsPath = Join-Path $RunPath 'apppool-events.csv'
-if (Test-Path -LiteralPath $appPoolEventsPath) {
-    $appPoolEvents = @(Import-Csv -LiteralPath $appPoolEventsPath)
-}
-
-$securityControls = @()
-$securityAuditPath = Join-Path $RunPath 'security-audit.json'
-if (Test-Path -LiteralPath $securityAuditPath) {
-    $securityControls = @(Get-Content -LiteralPath $securityAuditPath -Raw | ConvertFrom-Json)
-}
-
-$configBaseline = $null
-$configBaselinePath = Join-Path $RunPath 'configuration-baseline.json'
-if (Test-Path -LiteralPath $configBaselinePath) {
-    $configBaseline = Get-Content -LiteralPath $configBaselinePath -Raw | ConvertFrom-Json
+$reportTimeZone = [TimeZoneInfo]::Local
+if ($DateTimeZoneId) {
+    try { $reportTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById($DateTimeZoneId) }
+    catch { throw "Unknown -DateTimeZoneId '$DateTimeZoneId': $($_.Exception.Message)" }
 }
 
 $dayWarnings = New-Object System.Collections.Generic.List[string]
@@ -88,24 +78,27 @@ if ($Date) {
         throw "Could not parse -Date '$Date' as a date: $($_.Exception.Message)"
     }
 
-    $counters      = @(Select-ByDate -Records $counters -TimestampProperty 'Timestamp' -Date $targetDate)
-    $workerSamples = @(Select-ByDate -Records $workerSamples -TimestampProperty 'Timestamp' -Date $targetDate)
-    $appPoolEvents = @(Select-ByDate -Records $appPoolEvents -TimestampProperty 'Timestamp' -Date $targetDate)
+    $countersBeforeFilter = $counters.Count
+    $workersBeforeFilter = $workerSamples.Count
+    $eventsBeforeFilter = $appPoolEvents.Count
+    $counters      = @(Select-ByDate -Records $counters -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
+    $workerSamples = @(Select-ByDate -Records $workerSamples -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
+    $appPoolEvents = @(Select-ByDate -Records $appPoolEvents -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone)
 
-    $dayWarnings.Add("Report restricted to $($targetDate.ToString('yyyy-MM-dd')) (local time).") | Out-Null
-    if ($counters.Count -eq 0) { $dayWarnings.Add("No iis-counters.csv rows fall on $($targetDate.ToString('yyyy-MM-dd')).") | Out-Null }
-    if ($workerSamples.Count -eq 0) { $dayWarnings.Add("No worker-processes.csv rows fall on $($targetDate.ToString('yyyy-MM-dd')).") | Out-Null }
+    $dayWarnings.Add("Report restricted to $($targetDate.ToString('yyyy-MM-dd')) in timezone '$($reportTimeZone.Id)'; filtering used UTC boundaries.") | Out-Null
+    if ($counters.Count -eq 0 -and $countersBeforeFilter -gt 0) { $counterInput.Status = 'OUTSIDE_PERIOD' }
+    if ($workerSamples.Count -eq 0 -and $workersBeforeFilter -gt 0) { $workerInput.Status = 'OUTSIDE_PERIOD' }
+    if ($appPoolEvents.Count -eq 0 -and $eventsBeforeFilter -gt 0) { $appPoolEventInput.Status = 'OUTSIDE_PERIOD' }
 }
 
 $requests = @()
 $logWarnings = New-Object System.Collections.Generic.List[string]
 
 if ($LogPath) {
-    # When -Date is given, pre-filter which log files even get parsed
-    # (see Get-W3CLogFileSet) rather than parsing an entire log directory
-    # just to discard most of it in Select-ByDate below.
+    # File timestamps are local filesystem metadata while W3C rows are UTC.
+    # Do not pre-filter rotated files by a naive date; the authoritative UTC
+    # window is applied to normalized records below.
     $logSetParams = @{ Path = $LogPath }
-    if ($targetDate) { $logSetParams['SinceDate'] = $targetDate }
     $logSet = Read-W3CLogSet @logSetParams
     if (-not $logSet.FieldsConsistent) {
         $logWarnings.Add('IIS log files in this run use inconsistent #Fields: definitions; each file was parsed against its own header, but column sets differ across files.') | Out-Null
@@ -116,27 +109,41 @@ if ($LogPath) {
     foreach ($unreadable in @($logSet.UnreadableFiles)) {
         $logWarnings.Add("Could not read IIS log file '$($unreadable.Path)': $($unreadable.Error)") | Out-Null
     }
-    $requests = @($logSet.Records | ForEach-Object { ConvertTo-NormalizedRequestRecord -Record $_ })
+    $normalizedRequests = New-Object System.Collections.Generic.List[object]
+    foreach ($record in $logSet.Records) {
+        $normalizedRequests.Add((ConvertTo-NormalizedRequestRecord -Record $record)) | Out-Null
+    }
+    $requests = @($normalizedRequests)
+    $logInputStatus = if ($requests.Count -gt 0) { 'PRESENT' } elseif (@($logSet.UnreadableFiles).Count -gt 0) { 'INVALID' } else { 'EMPTY' }
 
     if ($targetDate) {
-        $requests = @(Select-ByDate -Records $requests -TimestampProperty 'Timestamp' -Date $targetDate)
-        if ($requests.Count -eq 0) { $dayWarnings.Add("No HTTP requests fall on $($targetDate.ToString('yyyy-MM-dd')) in the supplied -LogPath; check that the right daily log file(s) were passed.") | Out-Null }
+        $requests = @(Select-ByDate -Records $requests -TimestampProperty 'Timestamp' -Date $targetDate -TimeZone $reportTimeZone -UnspecifiedKind UnspecifiedAsUtc)
+        if ($requests.Count -eq 0) {
+            if ($logSet.Records.Count -gt 0) { $logInputStatus = 'OUTSIDE_PERIOD' }
+            $dayWarnings.Add("No HTTP requests fall on $($targetDate.ToString('yyyy-MM-dd')) in the supplied -LogPath; check the selected timezone and log files.") | Out-Null
+        }
     }
+    $logInputError = if ($logInputStatus -eq 'INVALID') { @($logSet.UnreadableFiles | ForEach-Object { $_.Error }) -join '; ' } else { $null }
+    $dataQuality += [pscustomobject]@{ Path = ($LogPath -join ';'); Status = $logInputStatus; Error = $logInputError }
 } else {
     $logWarnings.Add('No -LogPath supplied; HTTP traffic/latency analysis is unavailable for this report.') | Out-Null
+    $dataQuality += [pscustomobject]@{ Path = 'IIS W3C logs'; Status = 'ABSENT'; Error = $null }
 }
 
-$cpuValues          = @($workerSamples | Where-Object { $_.CPUPercent } | ForEach-Object { [double]$_.CPUPercent })
-$privateBytesValues = @($workerSamples | Where-Object { $_.PrivateBytes } | ForEach-Object { [double]$_.PrivateBytes })
-$queueValues        = @($counters | Where-Object { $_.QueueSize } | ForEach-Object { [double]$_.QueueSize })
-$connectionValues   = @($counters | Where-Object { $_.CurrentConnections } | ForEach-Object { [double]$_.CurrentConnections })
+$cpuValues          = @($workerSamples | Where-Object { $null -ne $_.CPUPercent -and $_.CPUPercent -ne '' } | ForEach-Object { [double]$_.CPUPercent })
+$privateBytesValues = @($workerSamples | Where-Object { $null -ne $_.PrivateBytes -and $_.PrivateBytes -ne '' } | ForEach-Object { [double]$_.PrivateBytes })
+$queueValues        = @($counters | Where-Object { $null -ne $_.QueueSize -and $_.QueueSize -ne '' } | ForEach-Object { [double]$_.QueueSize })
+$connectionValues   = @($counters | Where-Object { $null -ne $_.CurrentConnections -and $_.CurrentConnections -ne '' } | ForEach-Object { [double]$_.CurrentConnections })
 
-$rejectedMeasure = $counters | Where-Object { $_.RejectedRequests } | ForEach-Object { [double]$_.RejectedRequests } | Measure-Object -Maximum
+$rejectedMeasure = $counters | Where-Object { $null -ne $_.RejectedRequests -and $_.RejectedRequests -ne '' } | ForEach-Object { [double]$_.RejectedRequests } | Measure-Object -Maximum
 $rejectedTotal = if ($rejectedMeasure) { $rejectedMeasure.Maximum } else { $null }
 
 $latencyValues = @($requests | Where-Object { $null -ne $_.TimeTakenMs } | ForEach-Object { $_.TimeTakenMs })
 $statusBreakdown = Get-ResponseStatusBreakdown -Records $requests
 $endpointStats = @(Group-RequestsByEndpoint -Records $requests | Sort-Object RequestCount -Descending)
+$http405 = Get-Http405Analysis -Records $requests
+$transferAnalysis = @(Get-TransferAnalysis -Records $requests)
+$correlationTimeline = @(Get-IisCorrelationTimeline -Requests $requests -WorkerSamples $workerSamples -CounterSamples $counters -AppPoolEvents $appPoolEvents)
 
 $recycleCount = @($appPoolEvents | Where-Object { $_.EventType -eq 'OverlappedRecycle' }).Count
 
@@ -173,6 +180,12 @@ $summary = [pscustomobject]@{
     ConfigurationBaseline   = $configBaseline
     TrafficByPeriod         = $trafficByPeriod
     TrafficGranularity      = $trafficGranularity
+    Http405Analysis         = $http405
+    TransferAnalysis        = $transferAnalysis
+    DataQuality             = $dataQuality
+    DisplayTimeZone         = $DisplayTimeZone
+    ReportTimeZone          = $reportTimeZone.Id
+    CorrelationTimeline     = $correlationTimeline
 }
 
 $summaryPath = Join-Path $RunPath 'summary.json'

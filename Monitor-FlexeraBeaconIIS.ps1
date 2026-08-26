@@ -25,6 +25,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'src/Time.ps1')
 . (Join-Path $PSScriptRoot 'src/Discovery.ps1')
 . (Join-Path $PSScriptRoot 'src/WorkerProcess.ps1')
 . (Join-Path $PSScriptRoot 'src/PerformanceCounters.ps1')
@@ -40,21 +41,56 @@ function New-RunDirectory {
     return $runPath
 }
 
+function New-CsvStreamWriter {
+    param(
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $utf8WithBom = New-Object System.Text.UTF8Encoding -ArgumentList $true
+    [pscustomobject]@{
+        Writer = New-Object System.IO.StreamWriter -ArgumentList $Path, $false, $utf8WithBom
+        HeaderWritten = $false
+    }
+}
+
+function Write-CsvStreamRecord {
+    param(
+        [Parameter(Mandatory)][object]$CsvWriter,
+        [Parameter(Mandatory)][object[]]$Record
+    )
+
+    foreach ($item in $Record) {
+        $lines = @($item | ConvertTo-Csv -NoTypeInformation)
+        $startIndex = if ($CsvWriter.HeaderWritten) { 1 } else { 0 }
+        for ($i = $startIndex; $i -lt $lines.Count; $i++) {
+            $CsvWriter.Writer.WriteLine($lines[$i])
+        }
+        $CsvWriter.HeaderWritten = $true
+    }
+    # Preserve the previous per-write durability guarantee without closing and
+    # reopening the file (important on servers with on-access antivirus).
+    $CsvWriter.Writer.Flush()
+}
+
 function Write-CollectorEvent {
     param(
-        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][object]$CsvWriter,
         [Parameter(Mandatory)][string]$Level,
         [Parameter(Mandatory)][string]$Message
     )
 
-    $record = [pscustomobject]@{
-        Timestamp = (Get-Date).ToString('o')
+    Write-CsvStreamRecord -CsvWriter $CsvWriter -Record @([pscustomobject]@{
+        Timestamp = (Get-Date).ToUniversalTime().ToString('o')
         Level     = $Level
         Message   = $Message
-    }
+    })
+}
 
-    $exists = Test-Path -LiteralPath $Path
-    $record | Export-Csv -Path $Path -NoTypeInformation -Append:$exists -Encoding UTF8
+function Close-CsvStreamWriters {
+    param([Parameter(Mandatory)][hashtable]$CsvWriters)
+    foreach ($csvWriter in $CsvWriters.Values) {
+        if ($csvWriter -and $csvWriter.Writer) { $csvWriter.Writer.Dispose() }
+    }
 }
 
 Write-Host 'Starting Flexera Beacon IIS collector...'
@@ -73,7 +109,14 @@ $baselinePath          = Join-Path $runPath 'configuration-baseline.json'
 $securityAuditJsonPath = Join-Path $runPath 'security-audit.json'
 $securityAuditCsvPath  = Join-Path $runPath 'security-audit.csv'
 
-Write-CollectorEvent -Path $collectorEventsPath -Level 'INFO' -Message "Run directory created: $runPath"
+$csvWriters = @{
+    CollectorEvents = New-CsvStreamWriter -Path $collectorEventsPath
+    Counters        = New-CsvStreamWriter -Path $countersPath
+    WorkerProcesses = New-CsvStreamWriter -Path $workerProcessesPath
+    AppPoolEvents   = New-CsvStreamWriter -Path $appPoolEventsPath
+}
+
+Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'INFO' -Message "Run directory created: $runPath"
 
 # --- Preflight: discovery, configuration baseline, security audit -------
 # (FLEXERA-IIS-BASELINE.md section 15). A failed/ambiguous discovery
@@ -83,12 +126,13 @@ $topology = $null
 try {
     $topology = Invoke-FlexeraIisDiscovery -SiteName $SiteName -AppPoolName $AppPoolName
 } catch {
-    Write-CollectorEvent -Path $collectorEventsPath -Level 'FATAL' -Message "Discovery failed: $($_.Exception.Message)"
+    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'FATAL' -Message "Discovery failed: $($_.Exception.Message)"
+    Close-CsvStreamWriters -CsvWriters $csvWriters
     throw
 }
 
 foreach ($w in @($topology.Warnings)) {
-    Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message $w
+    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message $w
 }
 
 $baseline = $null
@@ -96,7 +140,7 @@ try {
     $baseline = New-FlexeraConfigurationBaseline -Topology $topology
     $baseline | ConvertTo-Json -Depth 8 | Set-Content -Path $baselinePath -Encoding UTF8
 } catch {
-    Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Configuration baseline capture failed: $($_.Exception.Message)"
+    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Configuration baseline capture failed: $($_.Exception.Message)"
 }
 
 # Log-field completeness preflight (SPECIFICATION.md section 16): explain
@@ -106,7 +150,7 @@ foreach ($siteLogging in @($baseline.Logging)) {
     if ($siteLogging.AllRequiredFieldsPresent) { continue }
 
     foreach ($missing in @($siteLogging.MissingFields)) {
-        Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Site '$($siteLogging.SiteName)' W3C logging is missing field '$($missing.Field)': $($missing.Impact)."
+        Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Site '$($siteLogging.SiteName)' W3C logging is missing field '$($missing.Field)': $($missing.Impact)."
     }
 }
 
@@ -118,14 +162,14 @@ try {
     $securityControls | ConvertTo-Json -Depth 8 | Set-Content -Path $securityAuditJsonPath -Encoding UTF8
     Export-SecurityAuditCsv -Controls $securityControls -Path $securityAuditCsvPath
 } catch {
-    Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Security audit failed: $($_.Exception.Message)"
+    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Security audit failed: $($_.Exception.Message)"
 }
 
 $metadata = [pscustomobject]@{
-    schemaVersion        = 1
-    toolVersion          = '0.1.0'
+    schemaVersion        = 2
+    toolVersion          = '0.2.0'
     computerName         = $env:COMPUTERNAME
-    collectionStart      = (Get-Date).ToString('o')
+    collectionStart      = (Get-Date).ToUniversalTime().ToString('o')
     collectionEnd        = $null
     sampleIntervalSeconds = $SampleIntervalSeconds
     durationRequested    = $Duration.ToString()
@@ -143,6 +187,7 @@ $metadata | ConvertTo-Json -Depth 8 | Set-Content -Path $metadataPath -Encoding 
 # --- Timed sampling loop --------------------------------------------------
 
 $appPoolNames = @($topology.SelectedAppPools | Select-Object -ExpandProperty Name)
+$sitePoolPairs = @(Get-IisSiteAppPoolPairs -Endpoints @($topology.Endpoints) -Sites @($topology.SelectedSites) -AppPoolNames $appPoolNames)
 $previousMap = @()
 $errorCount = 0
 $startTime = Get-Date
@@ -152,6 +197,7 @@ Write-Host "Collecting for $Duration (interval: ${SampleIntervalSeconds}s). Outp
 
 while ((Get-Date) -lt $endTime) {
     $tickStart = Get-Date
+    $tickStartUtc = $tickStart.ToUniversalTime()
 
     try {
         # @() matters here too: zero worker processes for every tracked
@@ -162,20 +208,26 @@ while ((Get-Date) -lt $endTime) {
         $currentMap = @(Get-WorkerProcessMap)
         $events = @(Update-WorkerProcessTracking -AppPoolNames $appPoolNames -CurrentMap $currentMap -PreviousMap $previousMap)
         if ($events.Count -gt 0) {
-            $exists = Test-Path -LiteralPath $appPoolEventsPath
-            $events | Export-Csv -Path $appPoolEventsPath -NoTypeInformation -Append:$exists -Encoding UTF8
+            Write-CsvStreamRecord -CsvWriter $csvWriters.AppPoolEvents -Record $events
         }
         $previousMap = $currentMap
 
+        $trackedPids = @($currentMap | Where-Object { $_.AppPoolName -in $appPoolNames } | Select-Object -ExpandProperty PID -Unique)
+        $workerSamplesByPid = @{}
+        foreach ($sample in @(Get-WorkerProcessCounterSamples -ProcessId $trackedPids)) {
+            $workerSamplesByPid[[int]$sample.PID] = $sample
+        }
+
         foreach ($poolName in $appPoolNames) {
             $poolPids = @($currentMap | Where-Object { $_.AppPoolName -eq $poolName } | Select-Object -ExpandProperty PID)
+            $workerCount = $poolPids.Count
 
             foreach ($processId in $poolPids) {
                 try {
-                    $wp = Get-WorkerProcessCounterSample -ProcessId $processId
+                    $wp = $workerSamplesByPid[[int]$processId]
                     if ($wp) {
                         $row = [pscustomobject]@{
-                            Timestamp       = $tickStart.ToString('o')
+                            Timestamp       = $tickStartUtc.ToString('o')
                             AppPoolName     = $poolName
                             PID             = $wp.PID
                             CPUPercent      = $wp.CPUPercent
@@ -184,25 +236,40 @@ while ((Get-Date) -lt $endTime) {
                             PrivateBytes    = $wp.PrivateBytes
                             ThreadCount     = $wp.ThreadCount
                             HandleCount     = $wp.HandleCount
+                            VirtualBytes    = $wp.VirtualBytes
+                            UptimeSeconds   = $wp.UptimeSeconds
+                            StartTimeUtc    = if ($wp.StartTimeUtc) { $wp.StartTimeUtc.ToString('o') } else { $null }
+                            CpuTotalSeconds = $wp.CpuTotalSeconds
+                            WorkerCountForPool = $workerCount
                         }
-                        $exists = Test-Path -LiteralPath $workerProcessesPath
-                        $row | Export-Csv -Path $workerProcessesPath -NoTypeInformation -Append:$exists -Encoding UTF8
+                        Write-CsvStreamRecord -CsvWriter $csvWriters.WorkerProcesses -Record @($row)
                     }
                 } catch {
                     $errorCount++
-                    Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Worker-process sample failed for PID $processId : $($_.Exception.Message)"
+                    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Worker-process sample failed for PID $processId : $($_.Exception.Message)"
                 }
             }
+        }
 
-            foreach ($site in $topology.SelectedSites) {
+        # Web Service counters are site-scoped and request-queue counters are
+        # pool-scoped. Sample each unique instance once, then compose rows.
+        $webSamplesBySite = @{}
+        foreach ($siteNameForCounter in @($sitePoolPairs | Select-Object -ExpandProperty SiteName -Unique)) {
+            $webSamplesBySite[$siteNameForCounter] = Get-WebServiceSample -SiteCounterInstance $siteNameForCounter
+        }
+        $queueSamplesByPool = @{}
+        foreach ($poolName in $appPoolNames) {
+            $queueSamplesByPool[$poolName] = Get-HttpSysQueueSample -QueueInstance $poolName
+        }
+
+        foreach ($pair in $sitePoolPairs) {
                 try {
-                    $webSample = Get-WebServiceSample -SiteCounterInstance $site.Name
-                    $queueSample = Get-HttpSysQueueSample -QueueInstance $poolName
-
+                    $webSample = $webSamplesBySite[$pair.SiteName]
+                    $queueSample = $queueSamplesByPool[$pair.AppPoolName]
                     $row = [pscustomobject]@{
-                        Timestamp                = $tickStart.ToString('o')
-                        SiteName                 = $site.Name
-                        AppPoolName              = $poolName
+                        Timestamp                = $tickStartUtc.ToString('o')
+                        SiteName                 = $pair.SiteName
+                        AppPoolName              = $pair.AppPoolName
                         CurrentConnections       = $webSample.CurrentConnections
                         ConnectionAttemptsPerSec = $webSample.ConnectionAttemptsPerSec
                         RequestsPerSec           = $webSample.TotalMethodRequestsPerSec
@@ -211,18 +278,23 @@ while ((Get-Date) -lt $endTime) {
                         QueueSize                = $queueSample.CurrentQueueSize
                         RejectedRequests         = $queueSample.RejectedRequests
                         ArrivalRate              = $queueSample.ArrivalRate
+                        MaximumConnections       = $webSample.MaximumConnections
+                        CurrentAnonymousUsers    = $webSample.CurrentAnonymousUsers
+                        CurrentNonAnonymousUsers = $webSample.CurrentNonAnonymousUsers
+                        ServiceUptimeSeconds     = $webSample.ServiceUptimeSeconds
+                        CacheHitRate             = $queueSample.CacheHitRate
+                        MaxQueueItemAge          = $queueSample.MaxQueueItemAge
+                        ActiveRequests           = $queueSample.ActiveRequests
                     }
-                    $exists = Test-Path -LiteralPath $countersPath
-                    $row | Export-Csv -Path $countersPath -NoTypeInformation -Append:$exists -Encoding UTF8
+                    Write-CsvStreamRecord -CsvWriter $csvWriters.Counters -Record @($row)
                 } catch {
                     $errorCount++
-                    Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Counter sample failed for site '$($site.Name)': $($_.Exception.Message)"
+                    Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Counter sample failed for site '$($pair.SiteName)' and pool '$($pair.AppPoolName)': $($_.Exception.Message)"
                 }
-            }
         }
     } catch {
         $errorCount++
-        Write-CollectorEvent -Path $collectorEventsPath -Level 'WARNING' -Message "Sampling tick failed: $($_.Exception.Message)"
+        Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'WARNING' -Message "Sampling tick failed: $($_.Exception.Message)"
     }
 
     $elapsed = (Get-Date) - $tickStart
@@ -232,9 +304,10 @@ while ((Get-Date) -lt $endTime) {
     }
 }
 
-$metadata.collectionEnd = (Get-Date).ToString('o')
+$metadata.collectionEnd = (Get-Date).ToUniversalTime().ToString('o')
 $metadata | ConvertTo-Json -Depth 8 | Set-Content -Path $metadataPath -Encoding UTF8
 
-Write-CollectorEvent -Path $collectorEventsPath -Level 'INFO' -Message "Collection finished. Collector errors: $errorCount"
+Write-CollectorEvent -CsvWriter $csvWriters.CollectorEvents -Level 'INFO' -Message "Collection finished. Collector errors: $errorCount"
+Close-CsvStreamWriters -CsvWriters $csvWriters
 Write-Host "Collection complete. Errors: $errorCount. Output: $runPath"
 Write-Host "Run .\Analyze-FlexeraBeaconIIS.ps1 -RunPath '$runPath' -LogPath <iis-log-path> to generate the report."

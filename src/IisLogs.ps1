@@ -225,6 +225,18 @@ function Read-W3CLogSet {
     }
 }
 
+function Get-W3CFieldValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Record,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $property = $Record.PSObject.Properties[$Name]
+    if (-not $property -or $property.Value -eq '-') { return $null }
+    return $property.Value
+}
+
 function ConvertTo-NormalizedRequestRecord {
     <#
         Converts a raw (all-string) W3C record into a typed record with
@@ -238,44 +250,35 @@ function ConvertTo-NormalizedRequestRecord {
         [Parameter(Mandatory)][object]$Record
     )
 
-    $props = $Record.PSObject.Properties.Name
-
-    function Get-FieldValue([string]$name) {
-        if ($props -contains $name) {
-            $v = $Record.$name
-            if ($v -eq '-') { return $null }
-            return $v
-        }
-        return $null
-    }
-
-    $dateStr = Get-FieldValue 'date'
-    $timeStr = Get-FieldValue 'time'
+    $dateStr = Get-W3CFieldValue -Record $Record -Name 'date'
+    $timeStr = Get-W3CFieldValue -Record $Record -Name 'time'
     $timestamp = $null
 
     if ($dateStr -and $timeStr) {
-        $parsed = [datetime]::MinValue
-        $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-        if ([datetime]::TryParse("$dateStr $timeStr", [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$parsed)) {
-            $timestamp = $parsed
-        }
+        $timestamp = ConvertTo-UtcDateTime -Value "$dateStr $timeStr" -UnspecifiedKind UnspecifiedAsUtc
     }
 
-    $statusRaw    = Get-FieldValue 'sc-status'
-    $subStatusRaw = Get-FieldValue 'sc-substatus'
-    $timeTakenRaw = Get-FieldValue 'time-taken'
-    $csBytesRaw   = Get-FieldValue 'cs-bytes'
-    $scBytesRaw   = Get-FieldValue 'sc-bytes'
+    $statusRaw    = Get-W3CFieldValue -Record $Record -Name 'sc-status'
+    $subStatusRaw = Get-W3CFieldValue -Record $Record -Name 'sc-substatus'
+    $timeTakenRaw = Get-W3CFieldValue -Record $Record -Name 'time-taken'
+    $csBytesRaw   = Get-W3CFieldValue -Record $Record -Name 'cs-bytes'
+    $scBytesRaw   = Get-W3CFieldValue -Record $Record -Name 'sc-bytes'
 
     [pscustomobject]@{
         Timestamp     = $timestamp
-        SiteName      = Get-FieldValue 's-sitename'
-        Method        = Get-FieldValue 'cs-method'
-        UriStem       = Get-FieldValue 'cs-uri-stem'
-        UriQuery      = Get-FieldValue 'cs-uri-query'
+        SiteName      = Get-W3CFieldValue -Record $Record -Name 's-sitename'
+        Method        = Get-W3CFieldValue -Record $Record -Name 'cs-method'
+        UriStem       = Get-W3CFieldValue -Record $Record -Name 'cs-uri-stem'
+        UriQuery      = Get-W3CFieldValue -Record $Record -Name 'cs-uri-query'
+        ClientIp      = Get-W3CFieldValue -Record $Record -Name 'c-ip'
+        ServerIp      = Get-W3CFieldValue -Record $Record -Name 's-ip'
+        UserAgent     = Get-W3CFieldValue -Record $Record -Name 'cs(User-Agent)'
+        AuthenticatedUser = Get-W3CFieldValue -Record $Record -Name 'cs-username'
+        Host           = Get-W3CFieldValue -Record $Record -Name 'cs-host'
+        ProtocolVersion = Get-W3CFieldValue -Record $Record -Name 'cs-version'
         StatusCode    = if ($statusRaw) { [int]$statusRaw } else { $null }
         SubStatus     = if ($null -ne $subStatusRaw) { [int]$subStatusRaw } else { $null }
-        Win32Status   = Get-FieldValue 'sc-win32-status'
+        Win32Status   = Get-W3CFieldValue -Record $Record -Name 'sc-win32-status'
         BytesReceived = if ($csBytesRaw) { [int64]$csBytesRaw } else { $null }
         BytesSent     = if ($scBytesRaw) { [int64]$scBytesRaw } else { $null }
         TimeTakenMs   = if ($timeTakenRaw) { [double]$timeTakenRaw } else { $null }
