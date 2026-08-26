@@ -150,7 +150,7 @@ if ($LogPath) {
     foreach ($unreadable in @($logSet.UnreadableFiles)) {
         $logWarnings.Add("Could not read IIS log file '$($unreadable.Path)': $($unreadable.Error)") | Out-Null
     }
-    $normalizedRequests = New-Object System.Collections.Generic.List[object]
+    $normalizedRequests = New-Object System.Collections.Generic.List[psobject]
     foreach ($record in $logSet.Records) {
         $normalizedRequests.Add((ConvertTo-NormalizedRequestRecord -Record $record)) | Out-Null
     }

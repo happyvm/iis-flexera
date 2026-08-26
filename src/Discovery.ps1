@@ -72,7 +72,7 @@ function Get-IisFlexeraEndpoints {
     Import-WebAdministrationModule
 
     $sites = @(Get-Website)
-    $matchedEndpoints = New-Object System.Collections.Generic.List[object]
+    $matchedEndpoints = New-Object System.Collections.Generic.List[psobject]
 
     foreach ($site in $sites) {
         if ($SiteName -and $site.Name -ne $SiteName) { continue }
@@ -97,7 +97,7 @@ function Get-IisFlexeraEndpoints {
             Write-Warning "Get-WebVirtualDirectory failed for site '$($site.Name)': $($_.Exception.Message)"
         }
 
-        $candidates = New-Object System.Collections.Generic.List[object]
+        $candidates = New-Object System.Collections.Generic.List[psobject]
         foreach ($a in $apps) {
             $candidates.Add([pscustomobject]@{ Path = $a.Path; PhysicalPath = $a.PhysicalPath; AppPoolName = $a.applicationPool }) | Out-Null
         }
@@ -355,13 +355,13 @@ function Invoke-FlexeraIisDiscovery {
     $sites = @($endpoints | Where-Object { $_.SiteName } | Select-Object -ExpandProperty SiteName -Unique)
     if (-not $sites -and $SiteName) { $sites = @($SiteName) }
 
-    $siteInfo = New-Object System.Collections.Generic.List[object]
+    $siteInfo = New-Object System.Collections.Generic.List[psobject]
     foreach ($s in $sites) {
         try { $siteInfo.Add((Get-IisSiteInfo -Name $s)) | Out-Null }
         catch { $warnings.Add("Could not read site info for '$s': $($_.Exception.Message)") }
     }
 
-    $poolInfo = New-Object System.Collections.Generic.List[object]
+    $poolInfo = New-Object System.Collections.Generic.List[psobject]
     foreach ($p in $resolvedPools) {
         try { $poolInfo.Add((Get-IisAppPoolInfo -Name $p)) | Out-Null }
         catch { $warnings.Add("Could not read AppPool info for '$p': $($_.Exception.Message)") }

@@ -59,7 +59,7 @@ function Read-W3CLogFile {
 
     $fields = $null
     $malformedCount = 0
-    $records = New-Object System.Collections.Generic.List[object]
+    $records = New-Object System.Collections.Generic.List[psobject]
 
     try {
         while ($null -ne ($line = $reader.ReadLine())) {
@@ -197,10 +197,10 @@ function Read-W3CLogSet {
     if ($SinceDate) { $fileSetParams['SinceDate'] = $SinceDate }
     if ($UntilDate) { $fileSetParams['UntilDate'] = $UntilDate }
     $files = Get-W3CLogFileSet @fileSetParams
-    $allRecords = New-Object System.Collections.Generic.List[object]
+    $allRecords = New-Object System.Collections.Generic.List[psobject]
     $totalMalformed = 0
-    $fieldSets = New-Object System.Collections.Generic.List[object]
-    $unreadableFiles = New-Object System.Collections.Generic.List[object]
+    $fieldSets = New-Object System.Collections.Generic.List[psobject]
+    $unreadableFiles = New-Object System.Collections.Generic.List[psobject]
 
     foreach ($file in $files) {
         try {
