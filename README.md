@@ -270,6 +270,10 @@ Current state (v0.1, in progress):
 - `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and an orchestration wiring them to discovered topology and the configuration baseline: HTTPS/port, TLS certificate validity/name-match, mutual TLS, Basic/Anonymous authentication, WebDAV, Request Filtering extensions, AppPool identity and HTTP logging.
 - `src/Reporting.ps1` — Markdown report generation, including a dedicated configuration-baseline section and requests-by-hour/day traffic breakdown.
 
+### Platform note: run this under Windows PowerShell 5.1, not PowerShell 7
+
+Confirmed against a real Flexera Beacon: running the collector under PowerShell 7 (`pwsh.exe`) hits a real, unresolvable-by-this-project limitation. `Import-Module WebAdministration -UseWindowsPowerShell` (PowerShell 7's compatibility fallback, which `Import-WebAdministrationModule` in `src/Discovery.ps1` now tries automatically) only proxies the module's *cmdlets* into the PS7 session - not its custom `WebAdministration` PSProvider, which is what exposes the `IIS:\` drive this project relies on (`Get-ChildItem IIS:\Sites`, `Get-Item IIS:\AppPools\<name>`, etc.). The module reports as loaded, `Get-WebApplication` etc. work, but any `IIS:\` path still fails with "Cannot find drive". There is no known workaround short of not using the `IIS:\` drive at all, which would need a broader rewrite this project has not undertaken. **Run `Monitor-FlexeraBeaconIIS.ps1` and `Analyze-FlexeraBeaconIIS.ps1` under Windows PowerShell 5.1 (`powershell.exe`)** - this project's primary supported target (SPECIFICATION.md section 4) - where the `IIS:\` drive works natively.
+
 Known v0.1 gaps, tracked as future work rather than silently faked:
 
 - `FB-IIS-SEC-004`/`FB-IIS-SEC-005` (Flexera's `CheckServerCertificate`/`CheckCertificateRevocation` registry preferences) are not implemented: SECURITY-AUDIT.md cites a Flexera registry key for them without giving its exact path, and guessing one risks reporting fabricated evidence.

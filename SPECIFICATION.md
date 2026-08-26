@@ -61,6 +61,8 @@ PowerShell 7 compatibility is desirable but must not require PowerShell 7.
 
 The implementation should avoid third-party PowerShell modules for the first version.
 
+**Confirmed technical blocker (v0.1):** PowerShell 7's Windows PowerShell compatibility layer (`Import-Module WebAdministration -UseWindowsPowerShell`) proxies the `WebAdministration` module's cmdlets but not its custom PSProvider, so the `IIS:\` drive this project uses (`Get-ChildItem IIS:\Sites`, `Get-Item IIS:\AppPools\<name>`, etc.) is unavailable under PowerShell 7 even after the module loads. Run the collector under Windows PowerShell 5.1 until/unless a future version removes the `IIS:\` drive dependency (see section 21).
+
 ---
 
 ## 5. Flexera/IIS discovery
@@ -733,6 +735,7 @@ These items should be resolved during implementation rather than guessed silentl
 - Best PID-safe mechanism for process performance counters on the oldest supported Windows Server version.
 - Whether the report should include SVG/PNG charts in v0.1 or remain Markdown/tabular.
 - Whether a future mode should temporarily add missing IIS W3C log fields with explicit administrator approval.
+- Whether a future version should rewrite `src/Discovery.ps1`/`src/ConfigurationBaseline.ps1` to avoid the `IIS:\` drive entirely (using only `Get-Website`/`Get-WebConfiguration`-style cmdlets) to get genuine PowerShell 7 support, given the confirmed limitation in section 4. Not attempted in v0.1: several AppPool/site properties currently read via `Get-Item IIS:\...` do not have a verified direct cmdlet equivalent, and this would need validation against a real IIS host either way.
 
 Document the chosen answers in the repository when implementation begins.
 

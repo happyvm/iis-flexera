@@ -5,6 +5,13 @@
 # to identify the pool serving downstream agent traffic
 # (FLEXERA-IIS-BASELINE.md section 10, SPECIFICATION.md section 5).
 
+function Test-IisDriveAvailable {
+    [CmdletBinding()]
+    param()
+
+    return [bool](Get-PSDrive -Name IIS -ErrorAction SilentlyContinue)
+}
+
 function Import-WebAdministrationModule {
     <#
         Centralizes WebAdministration loading so the PowerShell 7
@@ -16,22 +23,37 @@ function Import-WebAdministrationModule {
         powershell.exe. When that happens, load it explicitly through the
         Windows PowerShell compatibility layer instead of concluding the
         module is missing.
+
+        Loading through that compatibility layer only proxies cmdlets,
+        not the module's custom "WebAdministration" PSProvider - so the
+        IIS:\ drive this project relies on (Get-ChildItem IIS:\Sites,
+        Get-Item IIS:\AppPools\<name>, etc.) stays unavailable even after
+        the module itself reports as loaded. There is no known
+        workaround for that short of not using the IIS:\ drive at all;
+        this is flagged explicitly below rather than left to fail with an
+        opaque "Cannot find drive" error deep in an unrelated function.
     #>
     [CmdletBinding()]
     param()
 
-    if (Get-Module -Name WebAdministration) { return }
-
-    if ($PSVersionTable.PSEdition -eq 'Core') {
-        try {
-            Import-Module WebAdministration -UseWindowsPowerShell -ErrorAction Stop
-            return
-        } catch {
-            throw "The WebAdministration module could not be loaded via the Windows PowerShell compatibility layer under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); retry under powershell.exe."
+    if (-not (Get-Module -Name WebAdministration)) {
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            try {
+                Import-Module WebAdministration -UseWindowsPowerShell -ErrorAction Stop
+            } catch {
+                throw "The WebAdministration module could not be loaded via the Windows PowerShell compatibility layer under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); retry under powershell.exe."
+            }
+        } else {
+            Import-Module WebAdministration -ErrorAction Stop
         }
     }
 
-    Import-Module WebAdministration -ErrorAction Stop
+    if (-not (Test-IisDriveAvailable)) {
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            throw "The WebAdministration module loaded, but its IIS:\ PSDrive is not available in this PowerShell $($PSVersionTable.PSVersion) session. PowerShell 7's Windows PowerShell compatibility layer only proxies cmdlets (Get-WebApplication etc.), not the module's custom PSProvider that exposes IIS:\ - so IIS:\ paths cannot work here even though the module itself loaded successfully. This is a PowerShell platform limitation, not specific to this tool, and there is no known workaround short of avoiding IIS:\. Run this script under Windows PowerShell 5.1 (powershell.exe) instead - see SPECIFICATION.md section 4."
+        }
+        throw 'The WebAdministration module loaded but the IIS:\ PSDrive is still not available. Ensure "IIS Management Scripts and Tools" is installed (SPECIFICATION.md section 4).'
+    }
 }
 
 function Get-IisVersion {
