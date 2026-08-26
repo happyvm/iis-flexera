@@ -5,11 +5,33 @@
 # to identify the pool serving downstream agent traffic
 # (FLEXERA-IIS-BASELINE.md section 10, SPECIFICATION.md section 5).
 
-function Test-WebAdministrationAvailable {
+function Import-WebAdministrationModule {
+    <#
+        Centralizes WebAdministration loading so the PowerShell 7
+        fallback below only needs to exist once. Under PowerShell 7/Core,
+        Get-Module -ListAvailable frequently cannot see WebAdministration
+        at all (it is a Windows PowerShell 5.1 module, and PS7's default
+        $env:PSModulePath does not include the Windows PowerShell system
+        module path) even though it is installed and works fine under
+        powershell.exe. When that happens, load it explicitly through the
+        Windows PowerShell compatibility layer instead of concluding the
+        module is missing.
+    #>
     [CmdletBinding()]
     param()
 
-    return [bool](Get-Module -ListAvailable -Name WebAdministration)
+    if (Get-Module -Name WebAdministration) { return }
+
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        try {
+            Import-Module WebAdministration -UseWindowsPowerShell -ErrorAction Stop
+            return
+        } catch {
+            throw "The WebAdministration module could not be loaded via the Windows PowerShell compatibility layer under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); retry under powershell.exe."
+        }
+    }
+
+    Import-Module WebAdministration -ErrorAction Stop
 }
 
 function Get-IisVersion {
@@ -38,11 +60,7 @@ function Get-IisFlexeraEndpoints {
         [string]$AppPoolName
     )
 
-    if (-not (Test-WebAdministrationAvailable)) {
-        throw 'The WebAdministration module is not available. Run this on a Windows Server with IIS management tools installed.'
-    }
-
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
 
     $sites = Get-ChildItem -Path 'IIS:\Sites'
     $matchedEndpoints = New-Object System.Collections.Generic.List[object]
@@ -124,7 +142,7 @@ function Get-IisSiteInfo {
         [Parameter(Mandatory)][string]$Name
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
     $site = Get-Item "IIS:\Sites\$Name" -ErrorAction Stop
 
     $bindings = @($site.bindings.Collection | ForEach-Object {
@@ -204,7 +222,7 @@ function Get-IisAppPoolInfo {
         [Parameter(Mandatory)][string]$Name
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
     $pool = Get-Item "IIS:\AppPools\$Name" -ErrorAction Stop
 
     [pscustomobject]@{

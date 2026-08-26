@@ -4,6 +4,9 @@
 # without ever changing the server. A missing prerequisite or an
 # undetectable setting is recorded as evidence, not treated as permission
 # to remediate (FLEXERA-IIS-BASELINE.md section 1).
+#
+# Depends on Import-WebAdministrationModule from src/Discovery.ps1 being
+# defined; dot-source Discovery.ps1 before this file.
 
 function Get-IisRoleServiceStatus {
     <#
@@ -49,7 +52,7 @@ function Get-WebDavState {
         [Parameter(Mandatory)][string]$SitePath
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
 
     $moduleInstalled = [bool](Get-WebGlobalModule -Name 'WebDAVModule' -ErrorAction SilentlyContinue)
     if (-not $moduleInstalled) { return 'Not installed' }
@@ -74,7 +77,7 @@ function Get-RequestFilteringExtensionState {
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Extensions
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
 
     $result = [ordered]@{}
     foreach ($ext in $Extensions) {
@@ -102,7 +105,7 @@ function Get-IisAuthenticationState {
         [Parameter(Mandatory)][string]$SitePath
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
 
     function Get-AuthFlag([string]$Path, [string]$Section) {
         try {
@@ -218,7 +221,7 @@ function Get-IisLoggingConfiguration {
         [Parameter(Mandatory)][string]$SiteName
     )
 
-    Import-Module WebAdministration -ErrorAction Stop
+    Import-WebAdministrationModule
 
     $fieldMap = [ordered]@{
         'Date' = 'date'; 'Time' = 'time'; 'SiteName' = 's-sitename'; 'Method' = 'cs-method'
