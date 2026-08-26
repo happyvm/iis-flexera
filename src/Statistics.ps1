@@ -4,6 +4,45 @@
 # only computes observed statistics - it must never invent a pass/fail
 # threshold (SPECIFICATION.md section 14.2, FLEXERA-IIS-BASELINE.md section 13).
 
+function Select-ByDate {
+    <#
+        Filters records to a single calendar day [Date 00:00:00, Date+1
+        00:00:00), reading the given property as either a [datetime] or
+        a string PowerShell can cast to one (covers both normalized W3C
+        request records and CSV rows Import-Csv loaded as strings).
+        Records with a missing/unparsable timestamp are dropped rather
+        than guessed into the window - they cannot be reliably attributed
+        to a specific day.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records,
+        [Parameter(Mandatory)][string]$TimestampProperty,
+        [Parameter(Mandatory)][datetime]$Date
+    )
+
+    $dayStart = $Date.Date
+    $dayEnd = $dayStart.AddDays(1)
+
+    $Records | Where-Object {
+        $raw = $_.$TimestampProperty
+        if (-not $raw) { return $false }
+
+        $ts = $null
+        if ($raw -is [datetime]) {
+            $ts = $raw
+        } else {
+            $parsed = [datetime]::MinValue
+            if (-not [datetime]::TryParse("$raw", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+                return $false
+            }
+            $ts = $parsed
+        }
+
+        return ($ts -ge $dayStart -and $ts -lt $dayEnd)
+    }
+}
+
 function Get-Percentile {
     <#
         Nearest-rank percentile: rank = ceil(P/100 * N), 1-based, clamped

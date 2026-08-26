@@ -10,13 +10,27 @@
     latency analysis is unavailable and the report says so explicitly
     rather than fabricating figures (SPECIFICATION.md section 16).
 
+    Pass -Date to restrict the report to a single calendar day (local
+    time), filtering requests, counters, worker-process samples and
+    AppPool events alike. Useful both to re-analyze one day out of a
+    multi-day Monitor-FlexeraBeaconIIS.ps1 run, and to analyze IIS's own
+    daily-rotated W3C logs for a single past day without ever running the
+    collector - point -LogPath at that day's log file(s) directly.
+    Records with no resolvable timestamp are dropped rather than guessed
+    into the window.
+
     .EXAMPLE
     .\Analyze-FlexeraBeaconIIS.ps1 -RunPath .\output\2026-08-26_081500 -LogPath 'C:\inetpub\logs\LogFiles\W3SVC1'
+
+    .EXAMPLE
+    .\Analyze-FlexeraBeaconIIS.ps1 -RunPath .\output\2026-08-26_081500 -LogPath 'C:\inetpub\logs\LogFiles\W3SVC1' -Date 2026-08-25
+    Restricts the report to 2026-08-25 only, out of a longer run/log set.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$RunPath,
-    [string[]]$LogPath
+    [string[]]$LogPath,
+    [string]$Date
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +79,24 @@ if (Test-Path -LiteralPath $configBaselinePath) {
     $configBaseline = Get-Content -LiteralPath $configBaselinePath -Raw | ConvertFrom-Json
 }
 
+$dayWarnings = New-Object System.Collections.Generic.List[string]
+$targetDate = $null
+if ($Date) {
+    try {
+        $targetDate = [datetime]::Parse($Date, [System.Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        throw "Could not parse -Date '$Date' as a date: $($_.Exception.Message)"
+    }
+
+    $counters      = @(Select-ByDate -Records $counters -TimestampProperty 'Timestamp' -Date $targetDate)
+    $workerSamples = @(Select-ByDate -Records $workerSamples -TimestampProperty 'Timestamp' -Date $targetDate)
+    $appPoolEvents = @(Select-ByDate -Records $appPoolEvents -TimestampProperty 'Timestamp' -Date $targetDate)
+
+    $dayWarnings.Add("Report restricted to $($targetDate.ToString('yyyy-MM-dd')) (local time).") | Out-Null
+    if ($counters.Count -eq 0) { $dayWarnings.Add("No iis-counters.csv rows fall on $($targetDate.ToString('yyyy-MM-dd')).") | Out-Null }
+    if ($workerSamples.Count -eq 0) { $dayWarnings.Add("No worker-processes.csv rows fall on $($targetDate.ToString('yyyy-MM-dd')).") | Out-Null }
+}
+
 $requests = @()
 $logWarnings = New-Object System.Collections.Generic.List[string]
 
@@ -77,6 +109,11 @@ if ($LogPath) {
         $logWarnings.Add("Skipped $($logSet.MalformedCount) malformed IIS log row(s).") | Out-Null
     }
     $requests = @($logSet.Records | ForEach-Object { ConvertTo-NormalizedRequestRecord -Record $_ })
+
+    if ($targetDate) {
+        $requests = @(Select-ByDate -Records $requests -TimestampProperty 'Timestamp' -Date $targetDate)
+        if ($requests.Count -eq 0) { $dayWarnings.Add("No HTTP requests fall on $($targetDate.ToString('yyyy-MM-dd')) in the supplied -LogPath; check that the right daily log file(s) were passed.") | Out-Null }
+    }
 } else {
     $logWarnings.Add('No -LogPath supplied; HTTP traffic/latency analysis is unavailable for this report.') | Out-Null
 }
@@ -104,6 +141,7 @@ if ($timestamps.Count -gt 0) {
 $trafficByPeriod = @(Get-RequestVolumeByPeriod -Records $requests -Granularity $trafficGranularity)
 
 $allWarnings = New-Object System.Collections.Generic.List[string]
+foreach ($w in $dayWarnings) { $allWarnings.Add($w) | Out-Null }
 foreach ($w in $logWarnings) { $allWarnings.Add($w) | Out-Null }
 if ($metadata -and $metadata.warnings) {
     foreach ($w in @($metadata.warnings)) { $allWarnings.Add($w) | Out-Null }
@@ -111,6 +149,7 @@ if ($metadata -and $metadata.warnings) {
 
 $summary = [pscustomobject]@{
     Metadata               = $metadata
+    DateFilter              = if ($targetDate) { $targetDate.ToString('yyyy-MM-dd') } else { $null }
     RequestCount           = $requests.Count
     LatencyStats           = Get-StatisticsSummary -Values $latencyValues
     CpuStats                = Get-StatisticsSummary -Values $cpuValues
