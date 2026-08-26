@@ -231,7 +231,9 @@ function Get-IisLoggingConfiguration {
     }
 
     try {
-        $logFile = Get-ItemProperty -Path "IIS:\Sites\$SiteName" -Name logFile -ErrorAction Stop
+        $escapedName = $SiteName.Replace("'", "''")
+        $logFile = Get-WebConfiguration -Filter "system.applicationHost/sites/site[@name='$escapedName']/logFile" -PSPath 'MACHINE/WEBROOT/APPHOST' -ErrorAction Stop
+        if (-not $logFile) { throw "Site '$SiteName' not found." }
     } catch {
         return [pscustomobject]@{
             SiteName = $SiteName; Enabled = 'Unknown'; LogFormat = $null; Directory = $null; EnabledFields = @()
@@ -325,7 +327,9 @@ function New-FlexeraConfigurationBaseline {
     $endpointExtensions = @('.osd', '.npl', '.nds', '.ini')
 
     $endpointBaselines = foreach ($endpoint in @($Topology.Endpoints)) {
-        $sitePath = "IIS:\Sites\$($endpoint.SiteName)$($endpoint.Path)"
+        # MACHINE/WEBROOT/APPHOST/... rather than IIS:\Sites\... - see
+        # Import-WebAdministrationModule in src/Discovery.ps1 for why.
+        $sitePath = "MACHINE/WEBROOT/APPHOST/$($endpoint.SiteName)$($endpoint.Path)"
 
         $webDav = 'Unknown'
         $requestFiltering = [ordered]@{}

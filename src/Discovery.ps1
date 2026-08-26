@@ -5,13 +5,6 @@
 # to identify the pool serving downstream agent traffic
 # (FLEXERA-IIS-BASELINE.md section 10, SPECIFICATION.md section 5).
 
-function Test-IisDriveAvailable {
-    [CmdletBinding()]
-    param()
-
-    return [bool](Get-PSDrive -Name IIS -ErrorAction SilentlyContinue)
-}
-
 function Import-WebAdministrationModule {
     <#
         Centralizes WebAdministration loading so the PowerShell 7
@@ -24,36 +17,30 @@ function Import-WebAdministrationModule {
         Windows PowerShell compatibility layer instead of concluding the
         module is missing.
 
-        Loading through that compatibility layer only proxies cmdlets,
-        not the module's custom "WebAdministration" PSProvider - so the
-        IIS:\ drive this project relies on (Get-ChildItem IIS:\Sites,
-        Get-Item IIS:\AppPools\<name>, etc.) stays unavailable even after
-        the module itself reports as loaded. There is no known
-        workaround for that short of not using the IIS:\ drive at all;
-        this is flagged explicitly below rather than left to fail with an
-        opaque "Cannot find drive" error deep in an unrelated function.
+        This project deliberately avoids the module's IIS:\ PSDrive
+        everywhere (Get-Website/Get-WebConfiguration with a
+        "MACHINE/WEBROOT/APPHOST/..." configuration path instead of
+        Get-Item "IIS:\..."), because loading through the PowerShell 7
+        compatibility layer only proxies cmdlets, not the module's custom
+        PSProvider - so IIS:\ paths do not work there even once the
+        module itself loads successfully, and there is no known
+        workaround for that short of not using IIS:\ at all.
     #>
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Module -Name WebAdministration)) {
-        if ($PSVersionTable.PSEdition -eq 'Core') {
-            try {
-                Import-Module WebAdministration -UseWindowsPowerShell -ErrorAction Stop
-            } catch {
-                throw "The WebAdministration module could not be loaded via the Windows PowerShell compatibility layer under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); retry under powershell.exe."
-            }
-        } else {
-            Import-Module WebAdministration -ErrorAction Stop
+    if (Get-Module -Name WebAdministration) { return }
+
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        try {
+            Import-Module WebAdministration -UseWindowsPowerShell -ErrorAction Stop
+            return
+        } catch {
+            throw "The WebAdministration module could not be loaded via the Windows PowerShell compatibility layer under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message). This project targets Windows PowerShell 5.1 first (SPECIFICATION.md section 4); retry under powershell.exe."
         }
     }
 
-    if (-not (Test-IisDriveAvailable)) {
-        if ($PSVersionTable.PSEdition -eq 'Core') {
-            throw "The WebAdministration module loaded, but its IIS:\ PSDrive is not available in this PowerShell $($PSVersionTable.PSVersion) session. PowerShell 7's Windows PowerShell compatibility layer only proxies cmdlets (Get-WebApplication etc.), not the module's custom PSProvider that exposes IIS:\ - so IIS:\ paths cannot work here even though the module itself loaded successfully. This is a PowerShell platform limitation, not specific to this tool, and there is no known workaround short of avoiding IIS:\. Run this script under Windows PowerShell 5.1 (powershell.exe) instead - see SPECIFICATION.md section 4."
-        }
-        throw 'The WebAdministration module loaded but the IIS:\ PSDrive is still not available. Ensure "IIS Management Scripts and Tools" is installed (SPECIFICATION.md section 4).'
-    }
+    Import-Module WebAdministration -ErrorAction Stop
 }
 
 function Get-IisVersion {
@@ -84,7 +71,7 @@ function Get-IisFlexeraEndpoints {
 
     Import-WebAdministrationModule
 
-    $sites = Get-ChildItem -Path 'IIS:\Sites'
+    $sites = @(Get-Website)
     $matchedEndpoints = New-Object System.Collections.Generic.List[object]
 
     foreach ($site in $sites) {
@@ -165,7 +152,8 @@ function Get-IisSiteInfo {
     )
 
     Import-WebAdministrationModule
-    $site = Get-Item "IIS:\Sites\$Name" -ErrorAction Stop
+    $site = Get-Website -Name $Name | Select-Object -First 1
+    if (-not $site) { throw "Site '$Name' not found." }
 
     $bindings = @($site.bindings.Collection | ForEach-Object {
         [pscustomobject]@{
@@ -239,17 +227,34 @@ function Get-SslCertificateInfo {
 }
 
 function Get-IisAppPoolInfo {
+    <#
+        Reads AppPool configuration via Get-WebConfiguration against the
+        "MACHINE/WEBROOT/APPHOST" configuration path rather than the
+        IIS:\AppPools\<name> drive path - the config-path string form
+        does not depend on the WebAdministration PSProvider, so it works
+        under PowerShell 7's compatibility layer where IIS:\ does not
+        (see Import-WebAdministrationModule). Runtime state (Started/
+        Stopped) is not part of applicationHost.config, so it is read
+        separately via Get-WebAppPoolState.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Name
     )
 
     Import-WebAdministrationModule
-    $pool = Get-Item "IIS:\AppPools\$Name" -ErrorAction Stop
+
+    $escapedName = $Name.Replace("'", "''")
+    $pool = Get-WebConfiguration -Filter "system.applicationHost/applicationPools/add[@name='$escapedName']" -PSPath 'MACHINE/WEBROOT/APPHOST' -ErrorAction Stop
+    if (-not $pool) { throw "Application Pool '$Name' not found." }
+
+    $state = $null
+    try { $state = (Get-WebAppPoolState -Name $Name -ErrorAction Stop).Value }
+    catch { $state = $null }
 
     [pscustomobject]@{
         Name            = $Name
-        State           = $pool.state
+        State           = $state
         QueueLength     = $pool.queueLength
         MaxProcesses    = $pool.processModel.maxProcesses
         IdentityType    = $pool.processModel.identityType
