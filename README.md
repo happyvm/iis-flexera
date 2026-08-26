@@ -4,6 +4,8 @@
 
 The project is intentionally focused on IIS. It is not intended to monitor the complete Flexera Beacon stack.
 
+In addition to performance observation, the project includes a **read-only IIS security/configuration audit** comparing the effective server configuration against Microsoft IIS guidance and Flexera-specific requirements/recommendations. See [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md).
+
 ## Goal
 
 The primary goal is to answer, with measured data rather than estimates:
@@ -16,17 +18,17 @@ The primary goal is to answer, with measured data rather than estimates:
 - What are the response-time distributions (P50/P95/P99/max)?
 - Are there HTTP errors or application-pool recycles during the observation window?
 - Is the current IIS sizing appropriate for the observed workload?
-- Does the observed IIS configuration match the Flexera prerequisites and topology rules relevant to interpreting the measurements?
+- Does the current IIS security configuration match Microsoft guidance while remaining compatible with Flexera requirements?
 
 The expected workflow is:
 
 1. Deploy a PowerShell collector on a Flexera Inventory Beacon using IIS.
-2. Run a read-only Flexera/IIS preflight and capture a configuration baseline.
+2. Run a read-only Flexera/IIS configuration and security preflight.
 3. Run the collector for seven days by default.
 4. Sample IIS and worker-process counters at a short interval (target: 15 seconds).
 5. Parse IIS W3C logs for request-level statistics.
 6. Produce machine-readable CSV/JSON data.
-7. Generate a final summary report suitable for capacity analysis.
+7. Generate a final performance and security summary report suitable for capacity and configuration analysis.
 
 ## Scope
 
@@ -45,9 +47,12 @@ The expected workflow is:
 - Request-rate and bandwidth statistics.
 - Request latency percentiles.
 - Application-pool start/stop/recycle events.
-- Read-only Flexera/IIS prerequisite and topology checks.
 - Seven-day unattended data collection.
-- Final reporting and capacity-oriented summary statistics.
+- Read-only IIS/Flexera configuration-baseline checks.
+- Microsoft IIS versus Flexera security comparison.
+- TLS/certificate metadata checks without exporting secrets.
+- Authentication, WebDAV, Request Filtering, AppPool identity and logging checks.
+- Final reporting and capacity/security-oriented summary statistics.
 
 ### Explicitly out of scope
 
@@ -61,7 +66,7 @@ The first version must **not** become a general Flexera monitoring agent. The fo
 - General server monitoring unrelated to IIS.
 - Agent inventory processing outside the HTTP path.
 - Prometheus, Grafana, Centreon, Nagios or other external monitoring integrations.
-- Automatic remediation or tuning of IIS/Flexera configuration.
+- Automatic IIS/security remediation.
 
 ## Flexera/IIS context
 
@@ -74,7 +79,7 @@ The exact IIS topology must **not be hard-coded**. Depending on the Flexera depl
 
 The collector therefore needs to discover the IIS configuration and retain the discovered topology in its output metadata.
 
-In particular, an AppPool named `Flexera Beacon` is not sufficient by itself to identify the worker process serving downstream agent traffic. Flexera documents that pool for a specific central-server communication role. The monitor must resolve the actual `ManageSoftRL` / `ManageSoftDL` topology.
+In particular, an AppPool named `Flexera Beacon` is not sufficient by itself to identify the worker process serving downstream agent traffic. The monitor must resolve the actual `ManageSoftRL` / `ManageSoftDL` topology.
 
 ## Flexera baseline checks
 
@@ -88,15 +93,46 @@ The preflight should capture, without changing the server:
 - effective authentication for `ManageSoftRL` / `ManageSoftDL`,
 - WebDAV state,
 - Request Filtering rules relevant to known Flexera extensions such as `.osd`, `.npl`, `.nds` and `.ini`,
-- HTTP/HTTPS bindings and custom ports,
+- HTTP/HTTPS bindings,
 - AppPool state and worker-process mapping,
-- narrowly scoped Flexera local-web-server metadata when required to explain IIS behavior.
+- narrowly scoped Flexera local-web/security metadata when required to explain IIS behavior.
 
-Flexera documents topology-dependent authentication behavior. Standalone Beacons can require the same authentication method for `ManageSoftRL` and `ManageSoftDL`, while co-installed server roles can use different authentication settings. The monitor must therefore discover topology before declaring an authentication configuration inconsistent.
+Flexera documents topology-dependent authentication behavior. The monitor must therefore discover topology before declaring an authentication configuration inconsistent.
 
 The baseline is observational only. The project must not restart IIS, change authentication, disable WebDAV, alter Request Filtering, change certificates or modify Flexera configuration automatically.
 
 Flexera does not define universal IIS CPU, memory, request-rate, P95/P99 latency or HTTP.sys queue thresholds in the reviewed documentation. Capacity conclusions must therefore be based on measured evidence. Any future project-specific heuristic must be labeled as an `iis-flexera` heuristic, not a Flexera limit.
+
+## Security audit model
+
+Security is evaluated as a three-way comparison:
+
+```text
+Observed configuration
+vs Microsoft IIS guidance
+vs Flexera guidance
+=> Effective Flexera-compatible recommendation
+```
+
+The audit must explicitly represent product compatibility exceptions rather than blindly applying a generic IIS benchmark.
+
+Examples include:
+
+- Flexera prefers HTTPS as the first security improvement for Inventory Beacons.
+- Flexera prefers anonymous IIS authentication where possible for Inventory Agent/failover behavior, while generic IIS upload guidance often prefers authenticated upload paths.
+- WebDAV must be disabled for IIS-based Inventory Beacons.
+- Request Filtering should improve security without blocking Flexera extensions such as `.osd`, `.npl`, `.nds` and `.ini`.
+- Mutual TLS is supported as an optional enhanced-security design.
+- Basic Authentication must not be treated as secure over unencrypted HTTP.
+- Windows IIS role-service installation must be distinguished from effective site/application/path configuration.
+
+Version 0.1 intentionally avoids a single artificial security score. Results are reported by control/status and include `FLEXERA_EXCEPTION` / `CONFLICT` where appropriate.
+
+See:
+
+- [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md)
+- [`FLEXERA-IIS-BASELINE.md`](FLEXERA-IIS-BASELINE.md)
+- [`FLEXERA-IIS-PORT-CORRECTION.md`](FLEXERA-IIS-PORT-CORRECTION.md)
 
 ## Core measurements
 
@@ -157,6 +193,7 @@ Initial defaults:
 - Output format: CSV for time series plus JSON for metadata and summary data.
 - No external agent or database required.
 - Administrative execution is acceptable for the first version.
+- Security/configuration preflight is read-only.
 
 All important defaults should eventually be configurable through PowerShell parameters.
 
@@ -169,6 +206,8 @@ output/
 └── 2026-08-26_081500/
     ├── metadata.json
     ├── configuration-baseline.json
+    ├── security-audit.json
+    ├── security-audit.csv
     ├── iis-counters.csv
     ├── worker-processes.csv
     ├── apppool-events.csv
@@ -181,7 +220,6 @@ The final report should include at least:
 
 - Observation start/end/duration.
 - Discovered IIS topology.
-- Flexera/IIS baseline observations and warnings.
 - Total requests.
 - Average requests/sec.
 - P50/P95/P99/max request rate.
@@ -196,6 +234,11 @@ The final report should include at least:
 - Maximum HTTP.sys queue depth.
 - Total rejected requests.
 - Application-pool recycle/start/stop events.
+- Flexera mandatory security/configuration findings.
+- Microsoft IIS hardening observations.
+- Flexera compatibility exceptions.
+- TLS/certificate/authentication posture.
+- WebDAV / Request Filtering / AppPool identity findings.
 
 ## Design principles
 
@@ -206,28 +249,36 @@ The final report should include at least:
 5. **Recycle-safe**: follow worker-process PID changes automatically.
 6. **Version tolerant**: avoid relying on a single Flexera version-specific layout.
 7. **Raw data first**: preserve enough source data to rerun analysis without repeating the seven-day collection.
-8. **Fail partially, not completely**: if one performance counter is unavailable, continue collecting the remaining data and record the limitation.
+8. **Fail partially, not completely**: if one performance counter or audit datum is unavailable, continue and record the limitation.
 9. **No hidden dependencies**: PowerShell and Windows/IIS native interfaces should be sufficient for the first implementation.
-10. **Vendor facts vs heuristics**: never present project-specific thresholds as official Flexera recommendations.
+10. **Vendor-aware security**: generic Microsoft hardening must be reconciled with Flexera product requirements and compatibility constraints.
+11. **No automatic remediation**: security findings are evidence and recommendations only.
+12. **No secret export**: do not persist passwords, private keys, authorization headers or sensitive token values.
+13. **Vendor facts vs heuristics**: never present project-specific thresholds as official Flexera recommendations.
 
 ## Repository status
 
-The project is currently in the **specification/design phase**. Implementation should follow both [`SPECIFICATION.md`](SPECIFICATION.md) and [`FLEXERA-IIS-BASELINE.md`](FLEXERA-IIS-BASELINE.md).
+The project is currently in the **specification/design phase**. Implementation should follow [`SPECIFICATION.md`](SPECIFICATION.md), [`FLEXERA-IIS-BASELINE.md`](FLEXERA-IIS-BASELINE.md) and [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md).
 
 ## Reference documentation
 
 Flexera:
 
-- Inventory Beacon prerequisites: https://docs.flexera.com/flexera-one/it-assets/inventory-beacon/prerequisites-for-inventory-beacons
+- Inventory Beacon prerequisites: https://docs.flexera.com/fnms/inventory-beacon/prerequisites-for-inventory-beacons
 - Inventory collection / IIS configuration: https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/configuring-inventory-collection
-- Inventory collection / standalone authentication: https://docs.flexera.com/flexera/EN/ITAssets/ConfiguringDirectInvGathering.htm
-- Adjusting the Inventory Beacon web server: https://docs.flexera.com/flexera-one/it-assets/inventory-beacon-overview/fib-ref-introduction/adjusting-the-web-server-on-the-inventory-beacon
-- IIS Application Pools: https://docs.flexera.com/fnms/inventory-beacon-overview/fib-ref-introduction/iis-application-pools
+- Mutual TLS: https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/configuring-mutual-tls
+- Changing IIS passwords / Basic Authentication: https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/changing-iis-passwords-on-inventory-beacons
 - Configure .NET and IIS / WebDAV: https://docs.flexera.com/fnms-install/upgrade-guide/prerequisites-and-preparations/configure-net-and-iis
-- Inventory Beacon best practices: https://docs.flexera.com/flexera-one/it-assets/inventory-beacon-overview/fib-ref-introduction/best-practices-for-inventory-beacon
+- IIS roles/services: https://docs.flexera.com/fnms-install/installation-guide/notes-on-issues/iis-roles-services
 
 Microsoft:
 
+- IIS security best practices: https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/jj635855(v=ws.11)
+- Request Filtering: https://learn.microsoft.com/en-us/iis/manage/configuring-security/configure-request-filtering-in-iis
+- Basic Authentication: https://learn.microsoft.com/en-us/iis/configuration/system.webserver/security/authentication/basicauthentication
+- Application Pool identities: https://learn.microsoft.com/en-us/iis/manage/configuring-security/application-pool-identities
+- Directory browsing: https://learn.microsoft.com/en-us/iis/wmi-provider/directorybrowsesection-class
+- HSTS: https://learn.microsoft.com/en-us/iis/get-started/whats-new-in-iis-10-version-1709/iis-10-version-1709-hsts
 - AppCmd: https://learn.microsoft.com/en-us/iis/get-started/getting-started-with-iis/getting-started-with-appcmdexe
-- Microsoft IIS high-CPU troubleshooting / AppPool-to-PID mapping: https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/site-behavior-performance/troubleshoot-high-cpu-in-iis-app-pool
-- Microsoft IIS `time-taken`: https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/health-diagnostic-performance/time-taken-field-http-log
+- IIS high-CPU troubleshooting / AppPool-to-PID mapping: https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/site-behavior-performance/troubleshoot-high-cpu-in-iis-app-pool
+- IIS `time-taken`: https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/health-diagnostic-performance/time-taken-field-http-log
