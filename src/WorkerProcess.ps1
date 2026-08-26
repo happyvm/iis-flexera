@@ -18,7 +18,7 @@ function ConvertFrom-AppCmdListWps {
         [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines
     )
 
-    $results = New-Object System.Collections.Generic.List[object]
+    $results = New-Object System.Collections.Generic.List[psobject]
 
     foreach ($line in $Lines) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -68,7 +68,7 @@ function Update-WorkerProcessTracking {
         [AllowEmptyCollection()][object[]]$PreviousMap = @()
     )
 
-    $events = New-Object System.Collections.Generic.List[object]
+    $events = New-Object System.Collections.Generic.List[psobject]
     $now = (Get-Date).ToUniversalTime()
 
     foreach ($poolName in $AppPoolNames) {

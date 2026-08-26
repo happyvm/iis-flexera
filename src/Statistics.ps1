@@ -50,7 +50,7 @@ function Get-Percentile {
         [Parameter(Mandatory)][ValidateRange(0, 100)][double]$Percentile
     )
 
-    if (-not $Values -or $Values.Count -eq 0) { return $null }
+    if ($null -eq $Values -or $Values.Count -eq 0) { return $null }
 
     $sorted = @($Values | Sort-Object)
     $n = $sorted.Count
@@ -73,7 +73,7 @@ function Get-StatisticsSummary {
         [double[]]$Values
     )
 
-    if (-not $Values -or $Values.Count -eq 0) {
+    if ($null -eq $Values -or $Values.Count -eq 0) {
         return [pscustomobject]@{
             Count = 0; Mean = $null; Min = $null; Max = $null
             P50 = $null; P90 = $null; P95 = $null; P99 = $null
@@ -293,10 +293,10 @@ function Get-IisCorrelationTimeline {
             $key = $utc.ToString('yyyy-MM-ddTHH:mm:00Z')
             if (-not $buckets.ContainsKey($key)) {
                 $buckets[$key] = [pscustomobject]@{
-                    Requests = New-Object System.Collections.Generic.List[object]
-                    Workers = New-Object System.Collections.Generic.List[object]
-                    Counters = New-Object System.Collections.Generic.List[object]
-                    Events = New-Object System.Collections.Generic.List[object]
+                    Requests = New-Object System.Collections.Generic.List[psobject]
+                    Workers = New-Object System.Collections.Generic.List[psobject]
+                    Counters = New-Object System.Collections.Generic.List[psobject]
+                    Events = New-Object System.Collections.Generic.List[psobject]
                 }
             }
             switch ($source.Name) {

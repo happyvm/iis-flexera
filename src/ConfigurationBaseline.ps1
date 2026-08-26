@@ -326,7 +326,7 @@ function Test-RequiredW3CFieldsPresent {
         'cs(User-Agent)'  = 'agent/client software cannot be distinguished; this field is currently not logged and enabling it would improve diagnostics'
     }
 
-    $missing = New-Object System.Collections.Generic.List[object]
+    $missing = New-Object System.Collections.Generic.List[psobject]
     foreach ($field in $requiredFieldImpacts.Keys) {
         if ($EnabledFields -notcontains $field) {
             $missing.Add([pscustomobject]@{ Field = $field; Impact = $requiredFieldImpacts[$field] }) | Out-Null

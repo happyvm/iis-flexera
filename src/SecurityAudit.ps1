@@ -463,7 +463,7 @@ function Invoke-FlexeraSecurityAudit {
         [Parameter(Mandatory)][object]$Baseline
     )
 
-    $controls = New-Object System.Collections.Generic.List[object]
+    $controls = New-Object System.Collections.Generic.List[psobject]
     $siteHasHttps = @{}
 
     foreach ($site in @($Topology.SelectedSites)) {
