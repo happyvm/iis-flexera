@@ -128,6 +128,59 @@ function Get-IisSiteInfo {
     }
 }
 
+function Get-SslCertificateInfo {
+    <#
+        Resolves the X.509 certificate bound via an HTTPS binding's
+        certificateHash/certificateStoreName, using only local metadata
+        APIs. Returns subject/SAN/validity/thumbprint and a boolean
+        HasPrivateKey flag; the private key itself is never read or
+        exported (FLEXERA-IIS-BASELINE.md section 4, SECURITY-AUDIT.md
+        section 11).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$CertificateHash,
+        [string]$StoreName = 'My'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CertificateHash)) { return $null }
+
+    try {
+        $cert = Get-ChildItem -Path "Cert:\LocalMachine\$StoreName" -ErrorAction Stop |
+            Where-Object { $_.Thumbprint -eq $CertificateHash } |
+            Select-Object -First 1
+    } catch {
+        return $null
+    }
+
+    if (-not $cert) { return $null }
+
+    $sanNames = @()
+    try {
+        $sanExtension = $cert.Extensions | Where-Object { $_.Oid.FriendlyName -eq 'Subject Alternative Name' } | Select-Object -First 1
+        if ($sanExtension) {
+            $sanNames = @(
+                ($sanExtension.Format($false) -split ',') |
+                    ForEach-Object { ($_ -replace '^[^=]+=', '').Trim() } |
+                    Where-Object { $_ }
+            )
+        }
+    } catch {
+        # SAN parsing is best-effort; an unparsable extension just yields no SAN names.
+        $sanNames = @()
+    }
+
+    [pscustomobject]@{
+        Thumbprint      = $cert.Thumbprint
+        Subject         = $cert.Subject
+        Issuer          = $cert.Issuer
+        NotBefore       = $cert.NotBefore
+        NotAfter        = $cert.NotAfter
+        SubjectAltNames = $sanNames
+        HasPrivateKey   = $cert.HasPrivateKey
+    }
+}
+
 function Get-IisAppPoolInfo {
     [CmdletBinding()]
     param(
@@ -203,9 +256,9 @@ function Invoke-FlexeraIisDiscovery {
 
     [pscustomobject]@{
         IisVersion       = Get-IisVersion
-        Endpoints        = $endpoints
-        SelectedSites    = @($siteInfo)
-        SelectedAppPools = @($poolInfo)
+        Endpoints        = @($endpoints)
+        SelectedSites    = $siteInfo.ToArray()
+        SelectedAppPools = $poolInfo.ToArray()
         Warnings         = @($warnings)
     }
 }

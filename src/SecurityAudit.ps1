@@ -6,13 +6,18 @@
 # FLEXERA_EXCEPTION rather than a generic failure) independently testable
 # without needing a live IIS host.
 #
-# v0.1 scope note: this file implements a first subset of the full control
-# catalogue in SECURITY-AUDIT.md section 7 (HTTPS, port, Basic/Anonymous
-# authentication, WebDAV, Request Filtering, directory browsing, AppPool
-# identity, HTTP logging). TLS certificate metadata, mutual TLS, HSTS,
-# module-surface minimization and configuration-inheritance provenance are
-# not yet wired up and are left as explicit future work rather than
-# reported with fabricated data.
+# v0.1 scope note: this file implements a subset of the full control
+# catalogue in SECURITY-AUDIT.md section 7 (HTTPS, port, TLS certificate
+# validity/name match, mutual TLS, Basic/Anonymous authentication, WebDAV,
+# Request Filtering, directory browsing, AppPool identity, HTTP logging)
+# plus the Flexera-specific authentication-consistency check from
+# FLEXERA-IIS-BASELINE.md section 3.1. FB-IIS-SEC-004/005 (Flexera's
+# CheckServerCertificate/CheckCertificateRevocation preferences) are
+# deliberately not implemented: SECURITY-AUDIT.md cites a Flexera registry
+# key for them but does not specify its exact path, and guessing one risks
+# reading the wrong value and reporting fabricated evidence. HSTS and
+# module-surface minimization are also not yet wired up. All of this is
+# left as explicit future work rather than reported with fabricated data.
 
 function Get-HttpsUsageControl {
     [CmdletBinding()]
@@ -115,6 +120,128 @@ function Get-AnonymousAuthenticationControl {
         EffectiveRecommendation = 'Do not flag anonymous authentication as a generic failure; this is a documented Flexera product exception. Require HTTPS alongside anonymous access.'
         Status                  = $status
         Priority                = 'Medium'
+    }
+}
+
+function Get-ClientCertificateMode {
+    <#
+        Decodes IIS's sslFlags bitmask into a client-certificate mode.
+        Bit 2 (SslNegotiateCert) = Accept, bit 4 (SslRequireCert) =
+        Require (only meaningful together with bit 2); absent = Ignore.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int]$SslFlags
+    )
+
+    if ($SslFlags -band 4) { return 'Require' }
+    if ($SslFlags -band 2) { return 'Accept' }
+    return 'Ignore'
+}
+
+function Get-CertificateValidityControl {
+    <#
+        FB-IIS-SEC-003 (validity sub-check). $Now is an explicit parameter
+        rather than an internal Get-Date call so the control stays
+        deterministic and testable.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][datetime]$NotBefore,
+        [Parameter(Mandatory)][datetime]$NotAfter,
+        [datetime]$Now = (Get-Date),
+        [int]$WarningWindowDays = 30
+    )
+
+    $status = if ($Now -lt $NotBefore) {
+        'FAIL'
+    } elseif ($Now -gt $NotAfter) {
+        'FAIL'
+    } elseif ($NotAfter -lt $Now.AddDays($WarningWindowDays)) {
+        'WARNING'
+    } else {
+        'PASS'
+    }
+
+    [pscustomobject]@{
+        ControlId               = 'FB-IIS-SEC-003'
+        Category                = 'Transport'
+        ObservedValue           = "NotBefore: $($NotBefore.ToString('o')); NotAfter: $($NotAfter.ToString('o'))"
+        MicrosoftGuidance       = $null
+        FlexeraGuidance         = 'Flexera expects the client to validate the Beacon server certificate; the certificate must be valid and trusted.'
+        EffectiveRecommendation = 'Keep the HTTPS server certificate valid and renew it before expiry.'
+        Status                  = $status
+        Priority                = if ($status -eq 'FAIL') { 'Critical' } else { 'Medium' }
+    }
+}
+
+function Get-CertificateNameMatchControl {
+    <#
+        FB-IIS-SEC-003 (name-match sub-check). Wildcard SAN/CN entries
+        (e.g. "*.example.com") are matched one label deep; this is a
+        best-effort check, not a full RFC 6125 implementation.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExpectedHostName,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CertificateNames
+    )
+
+    $status = 'UNKNOWN'
+
+    if ($CertificateNames -and $CertificateNames.Count -gt 0) {
+        $match = $CertificateNames | Where-Object {
+            if ($_ -eq $ExpectedHostName) { return $true }
+            if ($_.StartsWith('*')) {
+                $pattern = '^' + [regex]::Escape($_).Replace('\*', '[^.]+') + '$'
+                return $ExpectedHostName -match $pattern
+            }
+            return $false
+        }
+        $status = if ($match) { 'PASS' } else { 'FAIL' }
+    }
+
+    [pscustomobject]@{
+        ControlId               = 'FB-IIS-SEC-003'
+        Category                = 'Transport'
+        ObservedValue           = "Expected host: $ExpectedHostName; certificate names: $($CertificateNames -join ', ')"
+        MicrosoftGuidance       = $null
+        FlexeraGuidance         = "The certificate's DNS identity must match the server being contacted; local trust does not prove every Inventory Agent trusts the issuing CA."
+        EffectiveRecommendation = 'Ensure the certificate Subject/SAN covers the host name Inventory Agents use to reach this Beacon.'
+        Status                  = $status
+        Priority                = 'High'
+    }
+}
+
+function Get-MutualTlsControl {
+    <#
+        FB-IIS-SEC-008: mTLS is an optional enhanced-security profile, not
+        a mandatory baseline, so "not configured" is NOT_APPLICABLE rather
+        than a failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][bool]$HttpsPresent,
+        [Parameter(Mandatory)][ValidateSet('Ignore', 'Accept', 'Require')][string]$ClientCertificateMode
+    )
+
+    $status = if ($ClientCertificateMode -eq 'Ignore') {
+        'NOT_APPLICABLE'
+    } elseif ($ClientCertificateMode -eq 'Require' -and -not $HttpsPresent) {
+        'FAIL'
+    } else {
+        'INFO'
+    }
+
+    [pscustomobject]@{
+        ControlId               = 'FB-IIS-SEC-008'
+        Category                = 'Authentication'
+        ObservedValue           = "ClientCertificateMode: $ClientCertificateMode; HTTPS present: $HttpsPresent"
+        MicrosoftGuidance       = $null
+        FlexeraGuidance         = 'Flexera supports mutual TLS as an optional enhanced-security profile; the Beacon validates client-certificate format/validity but does not check client-certificate revocation.'
+        EffectiveRecommendation = 'mTLS is optional, not a mandatory baseline. If required, ensure every participating Inventory Agent can present a client certificate.'
+        Status                  = $status
+        Priority                = 'Informational'
     }
 }
 
@@ -288,16 +415,40 @@ function Invoke-FlexeraSecurityAudit {
     )
 
     $controls = New-Object System.Collections.Generic.List[object]
+    $siteHasHttps = @{}
 
     foreach ($site in @($Topology.SelectedSites)) {
         $httpsBindings = @($site.Bindings | Where-Object { $_.Protocol -eq 'https' })
         $httpBindings  = @($site.Bindings | Where-Object { $_.Protocol -eq 'http' })
+        $siteHasHttps[$site.Name] = ($httpsBindings.Count -gt 0)
 
         $controls.Add((Get-HttpsUsageControl -HttpsBindingPresent ($httpsBindings.Count -gt 0) -HttpBindingPresent ($httpBindings.Count -gt 0))) | Out-Null
 
         foreach ($b in @($site.Bindings)) {
-            if ($b.BindingInformation -match ':(?<port>\d+):') {
-                $controls.Add((Get-StandardPortControl -Port ([int]$Matches['port']) -Protocol $b.Protocol)) | Out-Null
+            if ($b.BindingInformation -match '^(?<ip>[^:]*):(?<port>\d+):(?<host>.*)$') {
+                $port = [int]$Matches['port']
+                $bindingHost = $Matches['host']
+
+                $controls.Add((Get-StandardPortControl -Port $port -Protocol $b.Protocol)) | Out-Null
+
+                if ($b.Protocol -eq 'https' -and $b.CertificateHash) {
+                    $certInfo = $null
+                    try { $certInfo = Get-SslCertificateInfo -CertificateHash $b.CertificateHash }
+                    catch { $certInfo = $null }
+
+                    if ($certInfo) {
+                        $controls.Add((Get-CertificateValidityControl -NotBefore $certInfo.NotBefore -NotAfter $certInfo.NotAfter)) | Out-Null
+
+                        if ($bindingHost) {
+                            $certNames = @($certInfo.SubjectAltNames)
+                            if ($certInfo.Subject -match 'CN=([^,]+)') { $certNames += $Matches[1].Trim() }
+                            $controls.Add((Get-CertificateNameMatchControl -ExpectedHostName $bindingHost -CertificateNames @($certNames | Select-Object -Unique))) | Out-Null
+                        }
+                    }
+
+                    $clientCertMode = Get-ClientCertificateMode -SslFlags ([int]$b.SslFlags)
+                    $controls.Add((Get-MutualTlsControl -HttpsPresent $true -ClientCertificateMode $clientCertMode)) | Out-Null
+                }
             }
         }
     }
@@ -312,7 +463,40 @@ function Invoke-FlexeraSecurityAudit {
         if ($endpoint.RequestFiltering -and $endpoint.RequestFiltering.Count -gt 0) {
             $controls.Add((Get-RequestFilteringExtensionControl -ExtensionStates $endpoint.RequestFiltering -RequestFilteringEnabled $true)) | Out-Null
         }
+
+        $httpsEnforced = [bool]$siteHasHttps[$endpoint.Site]
+
+        if ($endpoint.Authentication) {
+            if ($null -ne $endpoint.Authentication.BasicEnabled) {
+                $controls.Add((Get-BasicAuthenticationControl -BasicAuthEnabled ([bool]$endpoint.Authentication.BasicEnabled) -HttpsEnforced $httpsEnforced)) | Out-Null
+            }
+            if ($null -ne $endpoint.Authentication.AnonymousEnabled) {
+                $controls.Add((Get-AnonymousAuthenticationControl -AnonymousEnabled ([bool]$endpoint.Authentication.AnonymousEnabled) -HttpsEnforced $httpsEnforced)) | Out-Null
+            }
+        }
     }
 
-    return @($controls)
+    foreach ($siteLogging in @($Baseline.Logging)) {
+        if ($siteLogging.Enabled -is [bool]) {
+            $timeTakenPresent = @($siteLogging.EnabledFields) -contains 'time-taken'
+            $controls.Add((Get-HttpLoggingControl -LoggingEnabled $siteLogging.Enabled -TimeTakenFieldPresent $timeTakenPresent)) | Out-Null
+        } else {
+            $controls.Add([pscustomobject]@{
+                ControlId               = 'FB-IIS-SEC-015'
+                Category                = 'Auditability'
+                ObservedValue           = "Enabled: $($siteLogging.Enabled)"
+                MicrosoftGuidance       = $null
+                FlexeraGuidance         = 'HTTP Logging is part of the documented IIS prerequisites for Inventory Beacons.'
+                EffectiveRecommendation = 'Could not read the effective logging configuration for this site; verify HTTP Logging manually.'
+                Status                  = 'UNKNOWN'
+                Priority                = 'Medium'
+            }) | Out-Null
+        }
+    }
+
+    foreach ($finding in @($Baseline.AuthenticationConsistency)) {
+        $controls.Add($finding) | Out-Null
+    }
+
+    return $controls.ToArray()
 }

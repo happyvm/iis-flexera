@@ -92,6 +92,132 @@ Describe 'Get-AppPoolIdentityControl' {
     }
 }
 
+Describe 'Get-ClientCertificateMode' {
+    It 'decodes SslRequireCert as Require' {
+        Get-ClientCertificateMode -SslFlags 4 | Should -Be 'Require'
+    }
+
+    It 'decodes SslNegotiateCert alone as Accept' {
+        Get-ClientCertificateMode -SslFlags 2 | Should -Be 'Accept'
+    }
+
+    It 'decodes no client-cert bits as Ignore' {
+        Get-ClientCertificateMode -SslFlags 1 | Should -Be 'Ignore'
+    }
+}
+
+Describe 'Get-CertificateValidityControl' {
+    It 'passes for a certificate comfortably within its validity window' {
+        $now = Get-Date '2026-06-01'
+        $result = Get-CertificateValidityControl -NotBefore (Get-Date '2026-01-01') -NotAfter (Get-Date '2027-01-01') -Now $now
+        $result.Status | Should -Be 'PASS'
+    }
+
+    It 'warns when the certificate expires within the warning window' {
+        $now = Get-Date '2026-06-01'
+        $result = Get-CertificateValidityControl -NotBefore (Get-Date '2026-01-01') -NotAfter (Get-Date '2026-06-10') -Now $now -WarningWindowDays 30
+        $result.Status | Should -Be 'WARNING'
+    }
+
+    It 'fails for an already-expired certificate' {
+        $now = Get-Date '2026-06-01'
+        $result = Get-CertificateValidityControl -NotBefore (Get-Date '2025-01-01') -NotAfter (Get-Date '2026-01-01') -Now $now
+        $result.Status | Should -Be 'FAIL'
+    }
+
+    It 'fails for a not-yet-valid certificate' {
+        $now = Get-Date '2026-01-01'
+        $result = Get-CertificateValidityControl -NotBefore (Get-Date '2026-06-01') -NotAfter (Get-Date '2027-01-01') -Now $now
+        $result.Status | Should -Be 'FAIL'
+    }
+}
+
+Describe 'Get-CertificateNameMatchControl' {
+    It 'passes for an exact SAN match' {
+        (Get-CertificateNameMatchControl -ExpectedHostName 'beacon.example.com' -CertificateNames @('beacon.example.com')).Status | Should -Be 'PASS'
+    }
+
+    It 'passes for a matching wildcard SAN' {
+        (Get-CertificateNameMatchControl -ExpectedHostName 'beacon.example.com' -CertificateNames @('*.example.com')).Status | Should -Be 'PASS'
+    }
+
+    It 'fails when no certificate name matches the expected host' {
+        (Get-CertificateNameMatchControl -ExpectedHostName 'beacon.example.com' -CertificateNames @('other.example.com')).Status | Should -Be 'FAIL'
+    }
+
+    It 'is unknown when no certificate names could be read' {
+        (Get-CertificateNameMatchControl -ExpectedHostName 'beacon.example.com' -CertificateNames @()).Status | Should -Be 'UNKNOWN'
+    }
+}
+
+Describe 'Get-MutualTlsControl' {
+    It 'is not applicable when client certificates are ignored' {
+        (Get-MutualTlsControl -HttpsPresent $true -ClientCertificateMode 'Ignore').Status | Should -Be 'NOT_APPLICABLE'
+    }
+
+    It 'is informational for a correctly configured Require mode over HTTPS' {
+        (Get-MutualTlsControl -HttpsPresent $true -ClientCertificateMode 'Require').Status | Should -Be 'INFO'
+    }
+
+    It 'fails when client certificates are required but HTTPS is not present' {
+        (Get-MutualTlsControl -HttpsPresent $false -ClientCertificateMode 'Require').Status | Should -Be 'FAIL'
+    }
+}
+
+Describe 'Invoke-FlexeraSecurityAudit' {
+    It 'wires topology/baseline data into HTTPS, port, AppPool identity, WebDAV, auth and logging controls without throwing' {
+        $topology = [pscustomobject]@{
+            SelectedSites = @(
+                [pscustomobject]@{
+                    Name     = 'Default Web Site'
+                    Bindings = @(
+                        [pscustomobject]@{ Protocol = 'https'; BindingInformation = '*:443:beacon.example.com'; CertificateHash = $null; SslFlags = 0 },
+                        [pscustomobject]@{ Protocol = 'http'; BindingInformation = '*:80:beacon.example.com'; CertificateHash = $null; SslFlags = 0 }
+                    )
+                }
+            )
+            SelectedAppPools = @(
+                [pscustomobject]@{ Name = 'Flexera Beacon'; IdentityType = 'ApplicationPoolIdentity' }
+            )
+        }
+
+        $baseline = [pscustomobject]@{
+            Endpoints = @(
+                [pscustomobject]@{
+                    Name             = 'ManageSoftRL'
+                    Site             = 'Default Web Site'
+                    WebDav           = 'Disabled'
+                    RequestFiltering = @{ '.osd' = 'Allowed'; '.npl' = 'Allowed'; '.nds' = 'Allowed'; '.ini' = 'Allowed' }
+                    Authentication   = [pscustomobject]@{ AnonymousEnabled = $true; BasicEnabled = $false; WindowsEnabled = $false }
+                }
+            )
+            Logging = @(
+                [pscustomobject]@{ SiteName = 'Default Web Site'; Enabled = $true; EnabledFields = @('date', 'time', 'time-taken') }
+            )
+            AuthenticationConsistency = @(
+                [pscustomobject]@{ ControlId = 'FB-IIS-BASE-001'; Status = 'PASS'; EffectiveRecommendation = 'consistent' }
+            )
+        }
+
+        $controls = Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline
+
+        $controls.Count | Should -BeGreaterThan 0
+        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-001' }).Status | Should -Be 'PASS'
+        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-007' }).Status | Should -Be 'FLEXERA_EXCEPTION'
+        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-013' }).Status | Should -Be 'PASS'
+        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-SEC-015' }).Status | Should -Be 'PASS'
+        ($controls | Where-Object { $_.ControlId -eq 'FB-IIS-BASE-001' }).Status | Should -Be 'PASS'
+    }
+
+    It 'returns an empty array without throwing when nothing was discovered' {
+        $topology = [pscustomobject]@{ SelectedSites = @(); SelectedAppPools = @() }
+        $baseline = [pscustomobject]@{ Endpoints = @(); Logging = @(); AuthenticationConsistency = @() }
+
+        $controls = Invoke-FlexeraSecurityAudit -Topology $topology -Baseline $baseline
+        $controls.Count | Should -Be 0
+    }
+}
+
 Describe 'Get-HttpLoggingControl' {
     It 'fails when logging is disabled' {
         (Get-HttpLoggingControl -LoggingEnabled $false -TimeTakenFieldPresent $false).Status | Should -Be 'FAIL'

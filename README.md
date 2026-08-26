@@ -266,15 +266,17 @@ Current state (v0.1, in progress):
 - `Analyze-FlexeraBeaconIIS.ps1` — parses IIS W3C logs and a run's CSV/JSON output into `summary.json` and `report.md`.
 - `src/Discovery.ps1`, `src/WorkerProcess.ps1`, `src/PerformanceCounters.ps1` — IIS/Flexera topology discovery, AppPool-to-PID mapping and lifecycle events, and performance-counter sampling. These require a Windows Server with IIS and have not been validated against a live Flexera Beacon yet.
 - `src/IisLogs.ps1`, `src/Statistics.ps1` — header-driven W3C log parsing and percentile/status statistics. Platform-independent; covered by Pester tests in `tests/`.
-- `src/ConfigurationBaseline.ps1` — read-only Flexera configuration-baseline snapshot (`configuration-baseline.json`).
-- `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and a partial orchestration wiring them to discovered topology.
-- `src/Reporting.ps1` — Markdown report generation.
+- `src/ConfigurationBaseline.ps1` — read-only Flexera configuration-baseline snapshot (`configuration-baseline.json`), including per-endpoint effective authentication, per-site W3C logging/field-completeness, and the `ManageSoftRL`/`ManageSoftDL` authentication-consistency check (`FB-IIS-BASE-001`, FLEXERA-IIS-BASELINE.md section 3.1).
+- `src/SecurityAudit.ps1` — Microsoft-vs-Flexera control decision functions (`security-audit.json`/`.csv`) and an orchestration wiring them to discovered topology and the configuration baseline: HTTPS/port, TLS certificate validity/name-match, mutual TLS, Basic/Anonymous authentication, WebDAV, Request Filtering extensions, AppPool identity and HTTP logging.
+- `src/Reporting.ps1` — Markdown report generation, including a dedicated configuration-baseline section and requests-by-hour/day traffic breakdown.
 
 Known v0.1 gaps, tracked as future work rather than silently faked:
 
-- The security-audit orchestration in `Invoke-FlexeraSecurityAudit` covers HTTPS/port, WebDAV, Request Filtering extensions and AppPool identity; it does not yet resolve effective Basic/Anonymous authentication, TLS certificate metadata, mutual TLS, HSTS, or module-surface controls from live IIS configuration.
-- `Discovery.ps1`/`PerformanceCounters.ps1`/`ConfigurationBaseline.ps1` require a Windows/IIS host to run and are not yet covered by integration tests (SPECIFICATION.md section 19.2); they have been syntax-checked but not exercised against a real Beacon.
+- `FB-IIS-SEC-004`/`FB-IIS-SEC-005` (Flexera's `CheckServerCertificate`/`CheckCertificateRevocation` registry preferences) are not implemented: SECURITY-AUDIT.md cites a Flexera registry key for them without giving its exact path, and guessing one risks reporting fabricated evidence.
+- Certificate **chain**/trust validation, HSTS, and IIS module/handler-surface minimization controls are not implemented.
+- `Discovery.ps1`/`PerformanceCounters.ps1`/`ConfigurationBaseline.ps1` require a Windows/IIS host to run and are not yet covered by integration tests (SPECIFICATION.md section 19.2); they have been syntax-checked and unit-tested where the logic is pure, but not exercised against a real Beacon.
 - Secret/credential redaction for exported AppPool identities is not implemented yet.
+- Reading `BeaconEngine.config` web-server metadata (FLEXERA-IIS-BASELINE.md section 9) is not implemented.
 
 Run the unit tests with [Pester](https://pester.dev/) on Windows PowerShell 5.1 or PowerShell 7:
 

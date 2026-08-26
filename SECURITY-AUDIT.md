@@ -175,6 +175,8 @@ Informational
 
 The following controls define the initial implementation target.
 
+`FLEXERA-IIS-BASELINE.md` section 3.1 defines one additional finding outside this catalogue's numbering, `FB-IIS-BASE-001` (authentication consistency between `ManageSoftRL`/`ManageSoftDL` on a standalone Beacon), reported alongside these controls in `configuration-baseline.json`'s `AuthenticationConsistency` array and merged into `security-audit.json`/the report's security section for visibility.
+
 ### FB-IIS-SEC-001 — HTTPS use
 
 **Observed:**
@@ -258,6 +260,8 @@ https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/con
 
 https://docs.flexera.com/fnms-discovery/gathering-flexnet-inventory/flexnet-inventory-agent/3rd-party-deployment/implementation/unix-config/install-unix/agent-third-party-deployment-enabling-https-protocol-on-unix-agents
 
+**Implementation status (iis-flexera v0.1):** implemented as two findings sharing this control ID (`src/SecurityAudit.ps1`): `Get-CertificateValidityControl` (`NotBefore`/`NotAfter` vs. the current time, `WARNING` inside a 30-day expiry window, `FAIL` if expired or not yet valid) and `Get-CertificateNameMatchControl` (expected host from the binding vs. the certificate's CN/SAN, with one-label wildcard matching, e.g. `*.example.com`). Certificate metadata is read via `Get-SslCertificateInfo` (`src/Discovery.ps1`) from the local machine certificate store by thumbprint, without exporting the private key (only a `HasPrivateKey` boolean is reported). Certificate **chain**/trust validation is not implemented.
+
 ---
 
 ### FB-IIS-SEC-004 — Server-certificate validation preference
@@ -279,6 +283,8 @@ Flexera documents `CheckServerCertificate=True` as the default behavior so compo
 Source:
 
 https://docs.flexera.com/flexera-one/it-assets/inventory-beacon-overview/fib-ref-introduction/registry-keys-for-inventory-beacon
+
+**Implementation status (iis-flexera v0.1):** not implemented. The cited source names a Flexera registry key for this preference but does not give its exact path in the documentation reviewed for this project, and guessing one risks reading the wrong value and reporting fabricated evidence (see `AGENTS.md`, "never fabricate unavailable measurements"). Implement this once the exact registry key path is confirmed against the deployed Flexera release.
 
 ---
 
@@ -304,6 +310,8 @@ Sources:
 https://docs.flexera.com/flexera-one/it-assets/inventory-beacon-overview/fib-ref-introduction/registry-keys-for-inventory-beacon
 
 https://docs.flexera.com/flexera-one/it-assets/inventory-beacon-overview/fib-ref-introduction/configuring-for-proxy-servers
+
+**Implementation status (iis-flexera v0.1):** not implemented, for the same reason as FB-IIS-SEC-004 (exact registry key path not confirmed).
 
 ---
 
@@ -339,6 +347,8 @@ Flexera sources:
 https://docs.flexera.com/fnms/inventory-beacon/prerequisites-for-inventory-beacons
 
 https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/changing-iis-passwords-on-inventory-beacons
+
+**Implementation status (iis-flexera v0.1):** implemented as `Get-BasicAuthenticationControl` (`src/SecurityAudit.ps1`), wired per Flexera endpoint using effective authentication read via `Get-IisAuthenticationState` and whether the endpoint's site has an HTTPS binding. "Basic Authentication disabled" resolves to `NOT_APPLICABLE` rather than a further evaluation of the authentication model, which remains a manual judgment call for now.
 
 ---
 
@@ -381,6 +391,8 @@ https://docs.flexera.com/fnms/inventory-beacon/prerequisites-for-inventory-beaco
 
 https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/changing-iis-passwords-on-inventory-beacons
 
+**Implementation status (iis-flexera v0.1):** implemented as `Get-AnonymousAuthenticationControl` (`src/SecurityAudit.ps1`), wired the same way as FB-IIS-SEC-006. "Basic/other authentication: evaluate against topology/failover design" and the mutual-TLS cross-reference remain manual judgment calls; only the anonymous+HTTPS/anonymous+HTTP cases are automated.
+
 ---
 
 ### FB-IIS-SEC-008 — Mutual TLS
@@ -409,6 +421,8 @@ mTLS is an optional enhanced-security profile, not a mandatory baseline.
 Source:
 
 https://docs.flexera.com/fnms/inventory-beacon-overview/local-web-server-tab/configuring-mutual-tls
+
+**Implementation status (iis-flexera v0.1):** implemented as `Get-MutualTlsControl` (`src/SecurityAudit.ps1`). The client-certificate mode is decoded from the binding's `sslFlags` bitmask via `Get-ClientCertificateMode`. `Require` over HTTPS reports `INFO` (not `PASS` - mTLS correctness cannot be confirmed from server-side configuration alone); `Require` without HTTPS reports `FAIL`; `Ignore` reports `NOT_APPLICABLE`. "Partially configured" beyond the Require-without-HTTPS case is not distinguished further.
 
 ---
 
@@ -641,6 +655,8 @@ Sources:
 https://docs.flexera.com/fnms/inventory-beacon/prerequisites-for-inventory-beacons
 
 https://docs.flexera.com/fnms-install/installation-guide/notes-on-issues/iis-roles-services
+
+**Implementation status (iis-flexera v0.1):** implemented as `Get-HttpLoggingControl` (`src/SecurityAudit.ps1`), wired per site using `Get-IisLoggingConfiguration`/`Test-RequiredW3CFieldsPresent` from `src/ConfigurationBaseline.ps1` (see section 7 of `FLEXERA-IIS-BASELINE.md`). "Missing security/performance fields" is currently checked for `time-taken` specifically rather than the full required-field list; the full list's impact is still reported separately in `configuration-baseline.json`'s `Logging[].MissingFields`. When the effective logging state cannot be read at all, the control reports `UNKNOWN` rather than guessing `FAIL`/`PASS`.
 
 ---
 
